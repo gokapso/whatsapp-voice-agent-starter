@@ -39,24 +39,31 @@ used; per-call guards make repeated deliveries harmless in one process.
 ## Tool results
 
 Every tool returns JSON with `ok`. Times come as an exact `slot` value (local ISO time with
-offset) plus a `when` phrase for the agent to say:
+offset) plus a `when` phrase for the agent to say. Examples from the Cal.com calendar:
 
 ```json
-{"ok": true, "slots": [{"slot": "2026-11-03T10:00:00-06:00", "when": "Tuesday, November 3 at 10 AM"}], "has_more": true, "timezone": "America/Chicago"}
-{"ok": true, "day": "2026-11-26", "day_spoken": "Thursday, November 26", "open": false, "closed_reason": "Thanksgiving holiday", "next_open_day": "2026-11-28", "next_open_day_spoken": "Saturday, November 28", "slots": []}
-{"ok": true, "status": "booked", "id": "1A2B3C4D", "slot": "2026-11-03T10:00:00-06:00", "when": "Tuesday, November 3 at 10 AM", "service_name": "Brake check and adjustment", "fictional": true}
-{"ok": false, "code": "slot_taken", "message": "Not booked. Another caller just took that time. Say so, call available_slots again and offer other times."}
+{"ok": true, "service_id": "consultation", "service_name": "Consultation", "timezone": "America/Chicago", "needs_email": true, "slots": [{"slot": "2026-11-03T10:00:00-06:00", "when": "Tuesday, November 3 at 10 AM"}], "has_more": true}
+{"ok": true, "service_id": "consultation", "service_name": "Consultation", "timezone": "America/Chicago", "needs_email": true, "day": "2026-11-02", "day_spoken": "Monday, November 2", "slots": [], "has_more": false, "next_available": {"slot": "2026-11-03T10:00:00-06:00", "when": "Tuesday, November 3 at 10 AM"}}
+{"ok": true, "id": "1A2B3C4D", "slot": "2026-11-03T10:00:00-06:00", "when": "Tuesday, November 3 at 10 AM", "service_id": "consultation", "status": "booked", "name": "Sam Lee", "timezone": "America/Chicago"}
+{"ok": false, "code": "slot_taken", "message": "Not booked. That time was just taken. Say so, call available_slots again and offer other times."}
 ```
 
-An open day with no free times returns `slots: []` and `next_available` (the soonest free slot
-after that day, or null). `book_appointment` returns `status: booked` or, when the same caller
-books the same slot again, `already_booked`. `cancel_appointment` returns the cancelled booking.
+`available_slots` returns at most two slots; for a day with nothing open, `next_available` is
+the soonest open time after it (or null). `book_appointment` returns `status` `booked`,
+`pending` (the business confirms it in Cal.com) or `already_booked` (same caller, same time).
+`reschedule_appointment` returns `status: rescheduled` and `previous_when`; the booking keeps
+its `id`. `cancel_appointment` returns the cancelled booking. The local development calendar
+(`CALENDAR=local`) returns the same shapes, plus `open`/`closed_reason` for days it has no
+slots on.
 
 Codes: `invalid_arguments`, `unknown_tool`, `invalid_date`, `outside_horizon`,
-`confirmation_required`, `unknown_service`, `slot_unavailable`, `slot_taken`, `not_found`,
-`internal_error`. Each message says how to recover, and the prompt has a rule for each code
-(`tests/test_tools.py` checks this). The provider receives `is_error = !ok`. Results are cached
-per `tool_call_id` (last 100) so a retried call cannot double-book.
+`service_required`, `unknown_service`, `confirmation_required`, `email_required`,
+`invalid_email`, `slot_unavailable`, `slot_taken`, `not_found`, `booking_rejected`,
+`not_confirmed`, `calendar_unavailable`, `internal_error`. Each message says how to recover,
+and the prompt has a rule for each code (`tests/test_tools.py` and `tests/test_calcom.py` check
+this). The provider receives `is_error = !ok`. Results are cached per `tool_call_id` (last 100)
+so a retried call cannot book twice. The Cal.com requests behind each tool are in
+`docs/calendar.md`.
 
 ## ElevenLabs Agents WebSocket (subset used)
 

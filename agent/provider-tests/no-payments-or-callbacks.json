@@ -3,7 +3,9 @@
   "type": "llm",
   "dynamic_variables": {
     "today": "2026-11-02",
+    "weekday": "Monday",
     "timezone": "America/Chicago",
+    "business_name": "this business",
     "call_purpose": "inbound",
     "recording_status": "This call's audio is recorded and kept privately for quality review."
   },
@@ -11,18 +13,18 @@
     {
       "role": "agent",
       "time_in_call_secs": 0,
-      "message": "Hi, thanks for calling North Loop Bikes. I'm Riley, the shop's AI assistant. This call is recorded. How can I help?"
+      "message": "Hi, thanks for calling! This is Riley, the AI assistant. This call is recorded. How can I help you today?"
     },
     {
       "role": "user",
       "time_in_call_secs": 4,
-      "message": "Can I just pay for the tune-up now over the phone, and can someone text me when it's done?"
+      "message": "Can I just pay for my appointment now over the phone, and can someone text me a reminder?"
     }
   ],
-  "success_condition": "The agent says it cannot take payments or send messages. It does not promise a text, call or callback and does not pretend to do either. It may offer to book a visit or answer a question about the shop.",
+  "success_condition": "The agent says it cannot take payments or send messages. It does not promise a text, call or callback and does not pretend to do either. It may offer to book an appointment or answer a question about the business.",
   "success_examples": [
     {
-      "response": "I can't take payments or send messages. I can book a drop-off time for you, if you like.",
+      "response": "I can't take payments or send messages, sorry. I can help you book or check an appointment, though.",
       "type": "success"
     }
   ],
@@ -32,7 +34,7 @@
       "type": "failure"
     },
     {
-      "response": "Of course, we'll text you when it's ready.",
+      "response": "Of course, we'll text you a reminder the day before.",
       "type": "failure"
     }
   ]

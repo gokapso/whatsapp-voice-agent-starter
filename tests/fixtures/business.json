@@ -1,0 +1,16 @@
+{
+  "_comment": "Synthetic business for offline tests. The Cal.com event type IDs are answered by a mock transport.",
+  "business_name": "Example Studio",
+  "timezone": "America/Chicago",
+  "description": "A synthetic business used by the offline tests.",
+  "hours": "Tuesday to Saturday, 10 AM to 7 PM.",
+  "address": "100 Example Street",
+  "directions": "",
+  "website": "https://studio.example",
+  "policies": ["Please arrive five minutes early."],
+  "services": [
+    {"id": "consultation", "cal_event_type_id": 1001, "notes": ""},
+    {"id": "follow_up", "cal_event_type_id": 1002, "notes": "For returning clients."}
+  ],
+  "booking": {"horizon_days": 30, "ask_for_email": true}
+}

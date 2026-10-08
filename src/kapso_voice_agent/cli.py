@@ -2,10 +2,11 @@
 
 Start here: `voice-agent init` writes a private .env with fresh local secrets.
 
-Offline commands (no network, no credentials): init, check, agent plan, tools schema, tools call,
-kapso webhook (without --yes), artifacts prune, dev fake-agent, dev init-env, secrets.
+Offline commands (no network, no credentials): init, check, agent plan, tools schema,
+tools call (with CALENDAR=local), kapso webhook (without --yes), artifacts prune, dev fake-agent,
+dev init-env, secrets.
 Network commands (operator only): serve, agent apply --yes, agent verify, kapso webhook --yes,
-artifacts fetch.
+artifacts fetch, calendar check (read-only), tools call (with Cal.com; writes need --yes).
 """
 
 import argparse
@@ -58,13 +59,21 @@ def write_new_private_file(path, text):
         out.write(text)
 
 
-def business_timezone(spec):
-    return json.loads(spec.business_path.read_text())["timezone"]
+def business_timezone(settings, spec, required=True):
+    """The time zone the agent config is rendered with: business.json's, or the development
+    calendar's with CALENDAR=local."""
+    if spec.business.timezone_name:
+        return spec.business.timezone_name
+    if settings.calendar == "local":
+        return json.loads(spec.dev_calendar_path.read_text())["timezone"]
+    if required:
+        fail(f"Set timezone in {shown_path(spec.business_path)} (IANA name, e.g. America/New_York)")
+    return "UTC"
 
 
 def cmd_check(args):
     settings, spec = context(args)
-    config = build_config(spec, business_timezone(spec))
+    config = build_config(spec, business_timezone(settings, spec, required=False))
     tools = config["conversation_config"]["agent"]["prompt"]["tools"]
     problems = []
     if settings.max_session_seconds < spec.max_duration_seconds:
@@ -82,10 +91,14 @@ def cmd_check(args):
         "greetings": {d: {"recorded": spec.greeting(d, True), "not_recorded": spec.greeting(d, False)}
                       for d in ("inbound", "outbound")},
         "tools": [t["name"] for t in tools],
+        "calendar": settings.calendar or "none",
+        # Filled in by the owner before Cal.com bookings work; `calendar check` reads the account.
+        "business_missing": spec.business.calcom_problems() if settings.calendar != "local" else [],
         "ready": {"calls": settings.calls_ready, "agent": settings.agent_ready, "operator_console": settings.operator_enabled,
                   "outbound": settings.enable_outbound, "local_capture": settings.local_capture},
         "agent_missing": settings.agent_missing(),
-        "set": sorted(k for k, v in {"KAPSO_API_KEY": settings.kapso_api_key, "WHATSAPP_PHONE_NUMBER_ID": settings.phone_number_id,
+        "set": sorted(k for k, v in {"CAL_API_KEY": settings.cal_api_key,
+                                     "KAPSO_API_KEY": settings.kapso_api_key, "WHATSAPP_PHONE_NUMBER_ID": settings.phone_number_id,
                                      "WHATSAPP_WEBHOOK_SECRET": settings.webhook_secret,
                                      "ELEVENLABS_API_KEY": settings.elevenlabs_api_key,
                                      "ELEVENLABS_AGENT_ID": settings.elevenlabs_agent_id,
@@ -100,7 +113,7 @@ def cmd_check(args):
 
 def cmd_agent_plan(args):
     settings, spec = context(args)
-    config = build_config(spec, business_timezone(spec))
+    config = build_config(spec, business_timezone(settings, spec))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(config, indent=2) + "\n")
@@ -169,7 +182,7 @@ def save_agent_id(path, agent_id):
 def cmd_agent_apply(args):
     from .provider import SetupError, apply_agent, dumps, elevenlabs_client
     settings, spec = context(args)
-    config = build_config(spec, business_timezone(spec))
+    config = build_config(spec, business_timezone(settings, spec))
     destination = agent_id_destination(args, settings)
     if not args.yes:
         plan = {"dry_run": True, "would": "update" if settings.elevenlabs_agent_id else "create",
@@ -200,7 +213,7 @@ def cmd_agent_apply(args):
 def cmd_agent_verify(args):
     from .provider import SetupError, dumps, elevenlabs_client, verify_agent
     settings, spec = context(args)
-    config = build_config(spec, business_timezone(spec))
+    config = build_config(spec, business_timezone(settings, spec))
     with elevenlabs_client(settings.elevenlabs_api_key) as client:
         try:
             result = verify_agent(settings, config, client)
@@ -226,7 +239,22 @@ def cmd_kapso_webhook(args):
         fail(str(error))
 
 
-def offline_store(args, spec):
+WRITE_TOOLS = ("book_appointment", "reschedule_appointment", "cancel_appointment")
+
+
+def tools_calendar(args, settings, spec):
+    """Cal.com when it is configured (real reads; writes only with --yes), otherwise the local
+    development calendar in --db."""
+    if settings.calendar == "calcom":
+        from .calcom import CalComCalendar
+        if args.now or args.db:
+            fail("--now and --db apply to the local development calendar only; this env uses Cal.com")
+        if args.name in WRITE_TOOLS and not args.yes:
+            fail(f"{args.name} changes your real Cal.com calendar (and Cal.com may email the attendee); add --yes")
+        try:
+            return CalComCalendar(settings.data_dir / "calendar.sqlite3", spec.business, settings.cal_api_key)
+        except ValueError as error:
+            fail(str(error))
     from .store import AppointmentStore
     clock = None
     if args.now:
@@ -235,7 +263,8 @@ def offline_store(args, spec):
         except ValueError:
             fail("--now must be an ISO datetime with offset, e.g. 2026-11-02T09:00:00-06:00")
         clock = lambda: fixed  # noqa: E731
-    return AppointmentStore(Path(args.db), spec.business_path, clock=clock)
+    return AppointmentStore(Path(args.db or REPO_ROOT / "data/offline-tools.sqlite3"), spec.business,
+                            spec.dev_calendar_path, clock=clock)
 
 
 def cmd_tools_schema(args):
@@ -243,15 +272,37 @@ def cmd_tools_schema(args):
 
 
 def cmd_tools_call(args):
-    _, spec = context(args)
+    settings, spec = context(args)
     try:
         parameters = json.loads(args.parameters)
     except ValueError:
         fail("parameters must be JSON, e.g. '{\"day\": \"2026-11-03\"}'")
-    runner = ToolRunner(offline_store(args, spec), "offline:" + args.caller)
+    runner = ToolRunner(tools_calendar(args, settings, spec), "offline:" + args.caller)
     result = runner.execute({"tool_name": args.name, "tool_call_id": "", "parameters": parameters})
     print(json.dumps(json.loads(result["result"]), indent=2))
     if result["is_error"]:
+        raise SystemExit(1)
+
+
+def cmd_calendar_check(args):
+    from .calcom import CalComClient, CalendarUnavailable
+    settings, spec = context(args)
+    if not settings.cal_api_key:
+        fail("Set CAL_API_KEY (create one in Cal.com under Settings > Security > API keys)")
+    business = spec.business
+    configured = [s.get("cal_event_type_id") for s in business.services]
+    try:
+        account = CalComClient(settings.cal_api_key).account(configured)
+    except CalendarUnavailable as error:
+        fail(f"Cal.com could not be read ({error}); check CAL_API_KEY")
+    problems = business.calcom_problems() + [f"cal_event_type_id {i} is not one of this account's event types"
+                                             for i in account.pop("configured_not_found")]
+    if business.timezone_name and account["profile_timezone"] and business.timezone_name != account["profile_timezone"]:
+        problems.append(f"business.json timezone {business.timezone_name} differs from the Cal.com profile's "
+                        f"{account['profile_timezone']}; times are spoken in business.json's")
+    print(json.dumps({**account, "business_file": shown_path(spec.business_path), "problems": problems,
+                      "network_requests": "read-only"}, indent=2))
+    if problems:
         raise SystemExit(1)
 
 
@@ -293,6 +344,10 @@ def serve_banner(settings, host, port, env_label):
         lines.append("Operator console: off (set OPERATOR_TOKEN, or run `voice-agent init`)")
     if settings.dev_agent_ws_url:
         lines.append("Agent: offline fake agent (development only: a tone and an echo, not a conversation)")
+    if settings.calendar == "calcom":
+        lines.append("Calendar: Cal.com (real availability and bookings)")
+    elif settings.calendar == "local":
+        lines.append("Calendar: local development calendar (bookings stay in DATA_DIR; not for real callers)")
     missing = settings.agent_missing()
     lines.append("Browser calls: ready" if not missing else "Browser calls: not ready, missing " + "; ".join(missing))
     whatsapp = [name for name, value in (("KAPSO_API_KEY", settings.kapso_api_key),
@@ -312,7 +367,10 @@ def cmd_serve(args):
 
     from .app import create_app
     settings, spec = context(args)
-    app = create_app(settings, spec)
+    try:
+        app = create_app(settings, spec)
+    except ValueError as error:
+        fail(str(error))
     path = env_path(args)
     label = shown_path(path) if path.is_file() else "process environment only"
     print("\n".join(serve_banner(settings, args.host, args.port, label)), flush=True)
@@ -328,6 +386,8 @@ DEV_ENV_TEMPLATE = """# Local offline development only (fake agent, no accounts)
 OPERATOR_TOKEN={operator_token}
 CALLER_KEY_SECRET={caller_key_secret}
 DEV_AGENT_WS_URL=ws://127.0.0.1:{port}
+# Offline development calendar (agent/dev-calendar.json); bookings stay in DATA_DIR only.
+CALENDAR=local
 """
 
 
@@ -344,7 +404,8 @@ def cmd_init_env(args):
 
 
 ENV_HEADER = """# Created by `voice-agent init`. Private (0600): never commit or share it.
-# Browser test: set ELEVENLABS_API_KEY, then `voice-agent agent apply --yes --save-agent-id`.
+# Browser call: set ELEVENLABS_API_KEY and CAL_API_KEY, fill in agent/business.json, then
+# `voice-agent calendar check` and `voice-agent agent apply --yes --save-agent-id`.
 # WhatsApp: also set KAPSO_API_KEY and WHATSAPP_PHONE_NUMBER_ID (see docs/deploy.md).
 """
 GENERATED = ("OPERATOR_TOKEN", "CALLER_KEY_SECRET", "WHATSAPP_WEBHOOK_SECRET")
@@ -375,7 +436,8 @@ def cmd_init(args):
     print(f"Wrote {shown_path(path)} (0600) with a new " + ", ".join(GENERATED) + ".")
     print(f"Operator token (paste it into the console): {values['OPERATOR_TOKEN']}")
     print(f"Show it again later: grep OPERATOR_TOKEN {shown_path(path)}")
-    print("Next: put your ElevenLabs API key in ELEVENLABS_API_KEY, then run "
+    print("Next: put your ElevenLabs and Cal.com API keys in ELEVENLABS_API_KEY and CAL_API_KEY, fill in "
+          "agent/business.json, run `uv run voice-agent calendar check`, then "
           "`uv run voice-agent agent apply --yes --save-agent-id`.")
 
 
@@ -420,13 +482,18 @@ def parser():
 
     tools = commands.add_parser("tools", help="Inspect and exercise tools offline").add_subparsers(dest="tools_command", required=True)
     tools.add_parser("schema", help="Print tool definitions sent to the provider").set_defaults(func=cmd_tools_schema)
-    call = tools.add_parser("call", help="Run one tool against a local SQLite file")
+    call = tools.add_parser("call", help="Run one tool against the configured calendar (Cal.com, or the local development one)")
     call.add_argument("name")
     call.add_argument("parameters", nargs="?", default="{}")
-    call.add_argument("--caller", default="demo", help="Offline caller label (stands in for the call's identity)")
-    call.add_argument("--db", default=str(REPO_ROOT / "data/offline-tools.sqlite3"))
-    call.add_argument("--now", help="Fixed clock, ISO datetime with offset")
+    call.add_argument("--caller", default="cli", help="Caller label (stands in for the call's identity)")
+    call.add_argument("--db", help="Local development calendar file (default data/offline-tools.sqlite3)")
+    call.add_argument("--now", help="Fixed clock for the local development calendar, ISO datetime with offset")
+    call.add_argument("--yes", action="store_true", help="Allow book/reschedule/cancel against the real Cal.com calendar")
     call.set_defaults(func=cmd_tools_call)
+
+    calendar = commands.add_parser("calendar", help="Cal.com setup").add_subparsers(dest="calendar_command", required=True)
+    calendar.add_parser("check", help="Read the Cal.com profile and event types and check business.json (read-only)").set_defaults(
+        func=cmd_calendar_check)
 
     artifacts = commands.add_parser("artifacts", help="Provider artifacts").add_subparsers(dest="artifacts_command", required=True)
     fetch = artifacts.add_parser("fetch", help="Download ElevenLabs MP3 + conversation JSON privately")

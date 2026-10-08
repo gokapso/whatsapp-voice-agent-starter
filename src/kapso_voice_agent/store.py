@@ -1,4 +1,5 @@
-"""Fictional appointment book in SQLite.
+"""Local development calendar in SQLite (CALENDAR=local). Real callers book through Cal.com
+(calcom.py); this offline book exists so the starter and its tests run without an account.
 
 Every read is bounded: slot lookups use a range on the unique slot index limited by the booking
 horizon, and caller lookups use the (caller, slot) index with LIMIT. Transactions hold one
@@ -14,11 +15,9 @@ import secrets
 import sqlite3
 from zoneinfo import ZoneInfo
 
+from .business import WEEKDAYS, failure, offered, spoken, spoken_day
 from .private import private_sqlite
 
-WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
-MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
-          "November", "December")
 MAX_OWN_BOOKINGS = 10
 MAX_OFFERED_SLOTS = 2
 
@@ -36,35 +35,16 @@ CREATE INDEX IF NOT EXISTS appointments_caller_slot ON appointments(caller, slot
 """
 
 
-def failure(code, message):
-    return {"ok": False, "code": code, "message": message}
-
-
-def spoken_day(day: date):
-    return f"{WEEKDAYS[day.weekday()].capitalize()}, {MONTHS[day.month - 1]} {day.day}"
-
-
-def spoken(slot):
-    """How the agent should say a slot: "Tuesday, November 3 at 10 AM". The model copies this
-    phrase, so it never has to work out a weekday from an ISO date."""
-    moment = datetime.fromisoformat(slot)
-    minutes = f":{moment.minute:02d}" if moment.minute else ""
-    return f"{spoken_day(moment.date())} at {moment.hour % 12 or 12}{minutes} {'AM' if moment.hour < 12 else 'PM'}"
-
-
-def offered(slot):
-    """A slot as tools return it: the exact value to book with, and the phrase to say."""
-    return {"slot": slot, "when": spoken(slot)}
-
-
 class AppointmentStore:
-    def __init__(self, path, business_path, clock=None):
+    needs_email = False
+
+    def __init__(self, path, business, calendar_path, clock=None):
         # Names and notes are personal data: the file (and its journal) is 0600 under any umask.
         self.path = private_sqlite(path)
-        self.business = json.loads(Path(business_path).read_text())
-        self.timezone = ZoneInfo(self.business["timezone"])
-        self.services = {service["id"]: service for service in self.business["services"]}
-        self.policy = self.business["appointments"]
+        self.business = business
+        self.calendar = json.loads(Path(calendar_path).read_text())
+        self.timezone = ZoneInfo(self.calendar["timezone"])
+        self.services = {service["id"]: service for service in self.calendar["services"]}
         self.clock = clock or (lambda: datetime.now(self.timezone))
         with self.connect() as db:
             db.executescript(SCHEMA)
@@ -85,42 +65,31 @@ class AppointmentStore:
     # Business facts -------------------------------------------------------------------------
 
     def info(self, topic="all"):
-        b = self.business
-        sections = {
-            "services": {"services": [{k: s[k] for k in ("id", "name", "minutes", "description")} for s in b["services"]],
-                         "appointments": {k: self.policy[k] for k in ("kind", "length_minutes", "explanation")}},
-            "hours": {"weekly_hours": {day: [f"{a}-{z}" for a, z in ranges] for day, ranges in b["weekly_hours"].items()},
-                      "timezone": b["timezone"]},
-            "closures": {"upcoming_closures": [c for c in b["closures"] if c["end"] >= self.now().date().isoformat()]},
-            "location": {"location": b["location"], "contact": b["contact"]},
-            "policies": {"policies": b["policies"]},
-        }
-        if topic == "all":
-            merged = {"ok": True, "business_name": b["business_name"], "description": b["description"]}
-            for section in sections.values():
-                merged.update(section)
-            return merged
-        return {"ok": True, **sections[topic]}
+        services = {"services": [{k: s[k] for k in ("id", "name", "minutes", "description")} for s in self.services.values()]}
+        if topic == "services":
+            return {"ok": True, **services}
+        facts = self.business.facts(topic)
+        return {"ok": True, **facts, **(services if topic == "all" else {})}
 
     def closed_reason(self, day: date):
         iso = day.isoformat()
-        for closure in self.business["closures"]:
+        for closure in self.calendar["closures"]:
             if closure["start"] <= iso <= closure["end"]:
                 return closure["reason"]
-        if not self.business["weekly_hours"][WEEKDAYS[day.weekday()]]:
-            return f"Closed on {WEEKDAYS[day.weekday()].capitalize()}s"
+        if not self.calendar["weekly_slots"].get(WEEKDAYS[day.weekday()]):
+            return f"No appointments on {WEEKDAYS[day.weekday()].capitalize()}s"
         return ""
 
     def slot_inventory(self):
         """Every bookable start time in the horizon, ignoring existing bookings. Bounded by policy."""
         now = self.now()
-        earliest = now + timedelta(minutes=self.policy["min_notice_minutes"])
+        earliest = now + timedelta(minutes=self.calendar["min_notice_minutes"])
         slots = []
-        for offset in range(self.policy["horizon_days"]):
+        for offset in range(self.calendar["horizon_days"]):
             day = now.date() + timedelta(days=offset)
             if self.closed_reason(day):
                 continue
-            for start in self.policy["slot_starts"].get(WEEKDAYS[day.weekday()], []):
+            for start in self.calendar["weekly_slots"].get(WEEKDAYS[day.weekday()], []):
                 slot = datetime.combine(day, time.fromisoformat(start), self.timezone)
                 if slot > earliest:
                     slots.append(slot.isoformat())
@@ -133,16 +102,18 @@ class AppointmentStore:
 
     # Tools ----------------------------------------------------------------------------------
 
-    def availability(self, day="", after=""):
-        result = {"ok": True, "timezone": self.business["timezone"], "slots": []}
+    def availability(self, service_id="", day="", after=""):
+        if service_id and service_id not in self.services:
+            return failure("unknown_service", "service_id must be one of: " + ", ".join(self.services) + ".")
+        result = {"ok": True, "timezone": self.calendar["timezone"], "needs_email": self.needs_email, "slots": []}
         if day:
             try:
                 wanted = date.fromisoformat(day)
             except ValueError:
                 return failure("invalid_date", "Use the local date as YYYY-MM-DD, worked out from today's date.")
             days_ahead = (wanted - self.now().date()).days
-            if not 0 <= days_ahead < self.policy["horizon_days"]:
-                last = self.now().date() + timedelta(days=self.policy["horizon_days"] - 1)
+            if not 0 <= days_ahead < self.calendar["horizon_days"]:
+                last = self.now().date() + timedelta(days=self.calendar["horizon_days"] - 1)
                 return failure("outside_horizon", f"Appointments can be checked only from today through {spoken_day(last)}. "
                                                   "Ask the caller for a date in that range.")
             result.update(day=day, day_spoken=spoken_day(wanted))
@@ -166,8 +137,7 @@ class AppointmentStore:
         return result
 
     def booking_problem(self, slot, service_id, confirmed):
-        """Why a booking may not be made, or None. A store backed by a real calendar reuses these
-        checks before it calls the calendar (docs/customize.md)."""
+        """Why a booking may not be made, or None."""
         if confirmed is not True:
             return failure("confirmation_required", "Not booked. Read back the service, day, time and name, and call again "
                                                     "with confirmed=true only after the caller clearly says yes.")
@@ -178,7 +148,7 @@ class AppointmentStore:
                                                "use an exact slot value from its result.")
         return None
 
-    def book(self, caller, slot, name, service_id, confirmed, note=""):
+    def book(self, caller, slot, name, service_id, confirmed, note="", email=""):
         if problem := self.booking_problem(slot, service_id, confirmed):
             return problem
         booking_id = secrets.token_hex(4).upper()
@@ -194,11 +164,11 @@ class AppointmentStore:
                                  (slot, caller)).fetchone()
             if own:
                 return {"ok": True, "status": "already_booked", **self.describe(own)}
-            return failure("slot_taken", "Not booked. Another caller just took that time. Say so, call available_slots "
+            return failure("slot_taken", "Not booked. Someone else just took that time. Say so, call available_slots "
                                          "again and offer other times.")
         return {"ok": True, "status": "booked", "id": booking_id, "slot": slot, "when": spoken(slot),
-                "timezone": self.business["timezone"], "name": name, "service_id": service_id,
-                "service_name": self.services[service_id]["name"], "fictional": True}
+                "timezone": self.calendar["timezone"], "name": name, "service_id": service_id,
+                "service_name": self.services[service_id]["name"]}
 
     def list_own(self, caller):
         with self.connect() as db:
@@ -206,6 +176,27 @@ class AppointmentStore:
                               "WHERE caller = ? AND slot >= ? ORDER BY slot, id LIMIT ?",
                               (caller, self.now().isoformat(), MAX_OWN_BOOKINGS)).fetchall()
         return {"ok": True, "appointments": [self.describe(row) for row in rows]}
+
+    def reschedule(self, caller, booking_id, slot, confirmed):
+        if confirmed is not True:
+            return failure("confirmation_required", "Not moved. Read back the old and new day and time, and call again "
+                                                    "with confirmed=true only after the caller clearly says yes.")
+        if slot not in self.slot_inventory():
+            return failure("slot_unavailable", "Not moved. That is not an open appointment time. Call available_slots and "
+                                               "use an exact slot value from its result.")
+        try:
+            with self.connect() as db:
+                # One statement: move only this caller's row; UNIQUE(slot) refuses a taken time.
+                rows = db.execute("UPDATE appointments SET slot = ? WHERE id = ? AND caller = ? "
+                                  "RETURNING id, slot, name, service_id, note",
+                                  (slot, booking_id.strip().upper(), caller)).fetchall()
+        except sqlite3.IntegrityError:
+            return failure("slot_taken", "Not moved. Someone else just took that time. Say so, call available_slots "
+                                         "again and offer other times.")
+        if not rows:
+            return failure("not_found", "Nothing moved. No appointment with that id for this caller. "
+                                        "Call my_appointments and use an id from it.")
+        return {"ok": True, "status": "rescheduled", **self.describe(rows[0])}
 
     def cancel(self, caller, booking_id, confirmed):
         if confirmed is not True:

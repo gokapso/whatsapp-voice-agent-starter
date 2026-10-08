@@ -2,7 +2,8 @@
 
 Everything on this page runs offline: no accounts, no network, no phone. These are development
 checks. They exercise the code paths (webhooks, call lifecycle, WebRTC, tools, storage), not the
-agent's conversation. For that, see `docs/testing.md`.
+agent's conversation. For that, see `docs/testing.md`. For the Cal.com setup, see
+`docs/calendar.md`.
 
 ## Test suite
 
@@ -17,27 +18,34 @@ python3 scripts/secret_scan.py    # run before every commit
 How the tests stand in for the outside world:
 
 - Kapso is an `httpx.MockTransport` (`tests/conftest.py:KapsoRecorder`).
+- Cal.com is an `httpx.MockTransport` that follows the documented API v2 shapes
+  (`tests/test_calcom.py:FakeCalCom`). Its tests use the synthetic `tests/fixtures/business.json`.
 - ElevenLabs is a local WebSocket (`tests/test_call_flow.py:Harness`). Its read-back of the
   stored agent's recording setting is a fixture (`provider_recording_readback`).
 - The caller is a local aiortc peer that sends a tone. The real SmallWebRTC transport and Pipecat
   pipeline run in between.
-- The store clock is pinned to Monday 2026-11-02 09:00 America/Chicago. Monday is closed.
+- The calendar clock is pinned to Monday 2026-11-02 09:00 America/Chicago. The call-flow tests
+  use the local development calendar (`agent/dev-calendar.json`), which has no Monday slots.
 
 ## Run the tools by hand
 
+With `CALENDAR=local` (offline) the tools use the local development calendar:
+
 ```sh
+export CALENDAR=local
 uv run voice-agent tools schema                        # definitions the provider receives
 uv run voice-agent tools call business_info '{"topic": "services"}'
 uv run voice-agent tools call available_slots '{"day": "2026-11-03"}' --now 2026-11-02T09:00:00-06:00
 uv run voice-agent tools call book_appointment \
-  '{"slot": "2026-11-03T10:00:00-06:00", "name": "Sam", "service_id": "brakes", "confirmed": true}' \
+  '{"slot": "2026-11-03T10:00:00-06:00", "name": "Sam Lee", "service_id": "consultation", "confirmed": true}' \
   --now 2026-11-02T09:00:00-06:00
 uv run voice-agent tools call my_appointments --now 2026-11-02T09:00:00-06:00
 uv run voice-agent tools call my_appointments --caller someone-else --now 2026-11-02T09:00:00-06:00   # empty
 ```
 
-These use `data/offline-tools.sqlite3` and the caller label `demo` unless you pass `--db` and
-`--caller`. The results are the exact JSON the agent receives.
+These use `data/offline-tools.sqlite3` and the caller label `cli` unless you pass `--db` and
+`--caller`. The results are the exact JSON the agent receives. With `CAL_API_KEY` set instead,
+the same commands read your real Cal.com calendar (`docs/calendar.md`).
 
 ## Browser call with the offline fake agent
 
@@ -46,8 +54,8 @@ The fake agent stands in for ElevenLabs. It plays a short tone as its "greeting"
 check the media path and the console without spending provider minutes.
 
 ```sh
-uv run voice-agent dev init-env              # writes .env.dev (0600): operator token, caller key, fake agent URL
-                                             # and prints the operator token
+uv run voice-agent dev init-env              # writes .env.dev (0600): operator token, caller key, fake agent URL,
+                                             # CALENDAR=local; prints the operator token
 uv run voice-agent dev fake-agent &          # ws://127.0.0.1:8765
 uv run voice-agent --env-file .env.dev serve # prints the console URL
 # open http://127.0.0.1:8080/operator/ and paste the token (grep OPERATOR_TOKEN .env.dev shows it again)
@@ -69,7 +77,7 @@ uv run python scripts/smoke_local.py   # health, webhook signature, operator aut
 
 `smoke_setup.py` gives the processes only `PATH`, a temporary `HOME` and `DATA_DIR`, and the env
 files the commands under test write. It checks that `init` writes a private `.env` and refuses to
-overwrite it, that `check` reports only the ElevenLabs agent as missing, that `serve` prints the
+overwrite it, that `check` reports only the ElevenLabs agent and the calendar as missing, that `serve` prints the
 console URL and no secret, and that a browser call is refused with a clear reason until the
 agent is set up.
 

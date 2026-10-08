@@ -34,7 +34,6 @@ from .events import EventLog
 from .outbound import OutboundError
 from .private import private_dir, prune_local_artifacts
 from .recording import RecordingUnknown
-from .store import AppointmentStore
 
 STATIC = Path(__file__).parent / "static"
 MAX_WEBHOOK_BYTES = 1_000_000
@@ -83,13 +82,25 @@ async def prune_periodically(settings, log, interval=PRUNE_INTERVAL_SECONDS):
         await asyncio.sleep(interval)
 
 
+def open_calendar(settings, spec):
+    """The tools' calendar: Cal.com for real bookings, the local SQLite book only when CALENDAR=local
+    (development). None when neither is configured; then no call starts (Settings.agent_missing)."""
+    if settings.calendar == "calcom":
+        from .calcom import CalComCalendar
+        return CalComCalendar(settings.data_dir / "calendar.sqlite3", spec.business, settings.cal_api_key)
+    if settings.calendar == "local":
+        from .store import AppointmentStore
+        return AppointmentStore(settings.data_dir / "appointments.sqlite3", spec.business, spec.dev_calendar_path)
+    return None
+
+
 def create_app(settings=None, spec=None, store=None, session_factory=ElevenSession,
                connection_factory=make_connection, kapso_factory=None, recording_reader=None):
     settings = settings or load_settings()
     spec = spec or load_spec(settings.agent_config_path)
     # DATA_DIR holds bookings, captures and provider downloads: 0700 before anything is written.
     private_dir(settings.data_dir)
-    store = store or AppointmentStore(settings.data_dir / "appointments.sqlite3", spec.business_path)
+    store = store or open_calendar(settings, spec)
     log = EventLog()
     manager = CallManager(settings, spec, store, log, session_factory=session_factory,
                           connection_factory=connection_factory, kapso_factory=kapso_factory,

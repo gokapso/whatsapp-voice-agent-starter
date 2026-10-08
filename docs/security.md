@@ -9,6 +9,7 @@
 | `/operator/*` | Anyone who can reach the port | Absent (404) unless `OPERATOR_TOKEN` (≥ 32 chars) is set; API needs `Authorization: Bearer`; constant-time compare; bearer header is not sent automatically by browsers, so no CSRF; page has a strict CSP and no embedded secrets |
 | Outbound calling | Operator only | Also needs `ENABLE_OUTBOUND=1`; permission check before every connect; one attempt, never auto-retried |
 | Agent conversation | Server only | Signed URL fetched server-side; agent requires auth; URL host pinned to `wss://api.elevenlabs.io`; `DEV_AGENT_WS_URL` limited to loopback |
+| Calendar | Server only | `CAL_API_KEY` stays on the server; fixed host `https://api.cal.com`, no redirects, short timeouts; the model never sees Cal.com uids and cannot pass an identifier to look anything up |
 | Recordings, bookings | Local filesystem only | No HTTP route serves files; `DATA_DIR` 0700, files 0600 (SQLite journal included) under any umask; size, count and age caps, pruned at startup and hourly |
 
 Recommended: expose only `/webhooks/whatsapp` and `/healthz` publicly at your proxy, and reach
@@ -16,8 +17,9 @@ Recommended: expose only `/webhooks/whatsapp` and `/healthz` publicly at your pr
 
 ## Private data on disk
 
-`DATA_DIR` holds the booking store (caller names and notes in plain text, caller keys as HMACs),
-local captures and provider downloads. At startup the server creates `DATA_DIR` as 0700 or
+`DATA_DIR` holds the caller-to-booking map for Cal.com (caller keys as HMACs, short ids, Cal.com
+uids, start times), the local development calendar if you use it (names and notes in plain text),
+local captures and provider downloads. Booking names, emails and notes are stored in Cal.com. At startup the server creates `DATA_DIR` as 0700 or
 tightens it to 0700, and refuses to start if it is not a real directory it owns. The SQLite file
 is created 0600 before SQLite opens it, so SQLite's journal files get 0600 too; files left by
 older runs are tightened. Existing parents of `DATA_DIR` are never changed. There is no
@@ -28,6 +30,8 @@ encryption at rest: protect the host and its backups.
 - Inbound identity: `from_user_id` (business-scoped user ID) if present, else `from`. Outbound:
   the callee's `to_user_id` or the dialed number. Browser tests: a random per-call identity.
 - The store keeps `HMAC-SHA256(CALLER_KEY_SECRET, identity)`, not the phone number or BSUID.
+- With Cal.com, a caller can list, move or cancel only bookings in the local map under their own
+  key. The caller's email is written into a new booking; it is never used to look one up.
 - Tools take no identity arguments; extra arguments are rejected. A person whose calls arrive
   sometimes with a BSUID and sometimes without one may appear as two callers. That is the safe
   failure: they see fewer bookings, never someone else's.

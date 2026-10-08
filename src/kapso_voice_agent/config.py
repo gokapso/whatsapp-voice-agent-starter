@@ -42,10 +42,13 @@ class Settings:
     meta_graph_version: str = "v24.0"
     elevenlabs_api_key: str = ""
     elevenlabs_agent_id: str = ""
+    cal_api_key: str = ""
+    # "calcom" (real bookings), "local" (offline development calendar) or "" (none: no calls start).
+    calendar: str = ""
     operator_token: str = ""
     caller_key_secret: str = ""
     ice_servers_json: str = "[]"
-    max_session_seconds: int = 200
+    max_session_seconds: int = 320
     max_concurrent_calls: int = 1
     enable_outbound: bool = False
     local_capture: bool = False
@@ -73,6 +76,8 @@ class Settings:
             missing.append("ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID (or DEV_AGENT_WS_URL)")
         if not (self.caller_key_secret or self.webhook_secret):
             missing.append("CALLER_KEY_SECRET (or WHATSAPP_WEBHOOK_SECRET)")
+        if not self.calendar:
+            missing.append("CAL_API_KEY (or CALENDAR=local for offline development)")
         return missing
 
     @property
@@ -113,6 +118,13 @@ def load_settings(environ=None, env_file=None):
     if operator_token and len(operator_token) < MIN_TOKEN_LENGTH:
         raise ConfigError(f"OPERATOR_TOKEN must be at least {MIN_TOKEN_LENGTH} characters, or empty to disable operator routes")
 
+    cal_api_key = get("CAL_API_KEY")
+    calendar = get("CALENDAR") or ("calcom" if cal_api_key else "")
+    if calendar not in ("", "calcom", "local"):
+        raise ConfigError("CALENDAR must be calcom, local (offline development only) or empty")
+    if calendar == "calcom" and not cal_api_key:
+        raise ConfigError("CALENDAR=calcom needs CAL_API_KEY")
+
     data_dir = Path(get("DATA_DIR") or REPO_ROOT / "data")
     agent_config = Path(get("AGENT_CONFIG_PATH") or REPO_ROOT / "agent/agent.toml")
     settings = Settings(
@@ -122,10 +134,12 @@ def load_settings(environ=None, env_file=None):
         meta_graph_version=get("META_GRAPH_VERSION", "v24.0"),
         elevenlabs_api_key=get("ELEVENLABS_API_KEY"),
         elevenlabs_agent_id=get("ELEVENLABS_AGENT_ID"),
+        cal_api_key=cal_api_key,
+        calendar=calendar,
         operator_token=operator_token,
         caller_key_secret=get("CALLER_KEY_SECRET"),
         ice_servers_json=ice,
-        max_session_seconds=_int(get("MAX_SESSION_SECONDS", "200"), "MAX_SESSION_SECONDS", 30, 3600),
+        max_session_seconds=_int(get("MAX_SESSION_SECONDS", "320"), "MAX_SESSION_SECONDS", 30, 3600),
         max_concurrent_calls=_int(get("MAX_CONCURRENT_CALLS", "1"), "MAX_CONCURRENT_CALLS", 1, 20),
         enable_outbound=_flag(get("ENABLE_OUTBOUND", "0"), "ENABLE_OUTBOUND"),
         local_capture=_flag(get("LOCAL_CAPTURE", "0"), "LOCAL_CAPTURE"),

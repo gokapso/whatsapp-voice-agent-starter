@@ -27,7 +27,7 @@ PHONE = "100000000000001"
 SECRET = "test-webhook-secret-not-real"
 TOKEN = "t" * 40
 KAPSO_KEY = "test-kapso-key-not-real"
-# Monday 2026-11-02 09:00 in the fictional shop's time zone; Monday is closed.
+# Monday 2026-11-02 09:00 in the development calendar's time zone; it has no Monday slots.
 NOW = datetime(2026, 11, 2, 9, 0, tzinfo=ZoneInfo("America/Chicago"))
 
 
@@ -71,16 +71,32 @@ def spec():
     return load_spec(REPO_ROOT / "agent/agent.toml")
 
 
+def configured_agent(directory):
+    """An agent directory like agent/, but with the synthetic filled-in business.json. Returns the
+    agent.toml path (for AGENT_CONFIG_PATH or load_spec)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in ("agent.toml", "prompt.md", "dev-calendar.json"):
+        (directory / name).symlink_to(REPO_ROOT / "agent" / name)
+    (directory / "business.json").symlink_to(FIXTURES / "business.json")
+    return directory / "agent.toml"
+
+
+@pytest.fixture
+def owner_spec(tmp_path):
+    """The real agent config with a configured business (name, time zone, Cal.com services)."""
+    return load_spec(configured_agent(tmp_path / "owner-agent"))
+
+
 @pytest.fixture
 def settings(tmp_path):
     return Settings(kapso_api_key=KAPSO_KEY, phone_number_id=PHONE, webhook_secret=SECRET,
                     elevenlabs_api_key="test-eleven-key-not-real", elevenlabs_agent_id="test-agent",
-                    operator_token=TOKEN, data_dir=tmp_path / "data", max_session_seconds=60)
+                    operator_token=TOKEN, data_dir=tmp_path / "data", max_session_seconds=60, calendar="local")
 
 
 @pytest.fixture
 def store(tmp_path, spec):
-    return AppointmentStore(tmp_path / "store.sqlite3", spec.business_path, clock=lambda: NOW)
+    return AppointmentStore(tmp_path / "store.sqlite3", spec.business, spec.dev_calendar_path, clock=lambda: NOW)
 
 
 class KapsoRecorder:
