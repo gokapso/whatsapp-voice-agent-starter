@@ -1,4 +1,4 @@
-# ElevenLabs Agents settings for the example assistant. Edit freely.
+# ElevenLabs Agents settings for Riley, the AI front desk. Edit freely.
 #
 # `voice-agent agent plan` renders this file, prompt.md and the tool schemas in
 # src/kapso_voice_agent/tools.py into build/agent-config.json without network access.
@@ -6,16 +6,18 @@
 
 [agent]
 # Provider-side name. `agent apply` refuses to update an existing agent whose name differs.
-name = "North Loop Bikes - Riley (Kapso voice agent starter)"
+name = "Riley front desk (Kapso voice agent starter)"
 assistant_name = "Riley"
-business_name = "North Loop Bikes"
 language = "en"
 prompt_file = "prompt.md"
+# Your business facts and the Cal.com event types Riley books. The business name comes from here.
 business_file = "business.json"
+# Offline calendar for development only (CALENDAR=local); real callers book through Cal.com.
+dev_calendar_file = "dev-calendar.json"
 llm = "gpt-4.1"
 temperature = 0.3
 max_tokens = 300
-tags = ["kapso", "voice-agent-starter", "english"]
+tags = ["kapso", "voice-agent-starter", "front-desk", "english"]
 
 [voice]
 # "River" is an ElevenLabs premade voice. It was the voice in one tested handset call;
@@ -23,13 +25,18 @@ tags = ["kapso", "voice-agent-starter", "english"]
 voice_id = "SAz9YHcvj6GT2YYXdXww"
 tts_model = "eleven_v4_turbo"
 speed = 0.95
-stability = 0.5
-# Expressive audio tags add laughs, sighs and other performed sounds. Off by default.
+# Lower stability lets the voice vary more from line to line. 0.45 is a small step down from 0.5
+# for a livelier delivery; listen on a real call and go back up if it sounds uneven.
+stability = 0.45
+# Expressive mode belongs to the Eleven v3 Conversational model and lets the LLM add audio tags
+# such as [laughs] or [sighs]. It stays off: performed sounds are not allowed here, and switching
+# models changes latency and turn-taking. The prompt asks for warmth in the words instead.
 expressive_mode = false
 
 [asr]
 provider = "scribe_realtime"
-keywords = ["North Loop", "Riley", "tune-up", "derailleur", "e-bike"]
+# Add your business name, service names and other words callers say that speech recognition might miss.
+keywords = ["Riley", "appointment", "reschedule"]
 
 [turn]
 turn_timeout = 15
@@ -38,7 +45,7 @@ turn_eagerness = "patient"
 
 [limits]
 # The bridge also enforces MAX_SESSION_SECONDS; keep it a little above this value.
-max_duration_seconds = 180
+max_duration_seconds = 300
 concurrency_limit = 1
 daily_limit = 10
 
@@ -50,8 +57,9 @@ record_audio = true
 retention_days = 7
 
 [greetings]
-# {assistant} and {business} come from [agent]. {recording} becomes recording_notice
-# (with a leading space) when recording applies, or nothing when it does not.
-inbound = "Hi, thanks for calling {business}. I'm {assistant}, the shop's AI assistant.{recording} How can I help?"
-outbound = "Hi, this is {assistant}, the AI assistant from {business}.{recording} Is now a good time to talk about your appointment?"
+# {assistant} comes from [agent]; {business} is business_name in business.json, and {at_business}
+# is " at <business_name>" or nothing while the name is empty. {recording} becomes
+# recording_notice (with a leading space) when recording applies, or nothing when it does not.
+inbound = "Hi, thanks for calling! This is {assistant}, the AI assistant{at_business}.{recording} How can I help you today?"
+outbound = "Hi, it's {assistant}, the AI assistant{at_business}.{recording} I'm calling about your appointment. Is now a good time?"
 recording_notice = "This call is recorded."

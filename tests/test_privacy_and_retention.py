@@ -351,7 +351,7 @@ class TestPrivateFiles:
         assert mode(shared) == "0o755"  # an existing parent is never changed
         with app.state.manager.store.connect() as db:
             db.execute("INSERT INTO appointments (id, slot, caller, name, service_id, created_at) "
-                       "VALUES ('A1', 'slot', 'caller', 'Sam', 'brakes', 'now')")
+                       "VALUES ('A1', 'slot', 'caller', 'Sam', 'consultation', 'now')")
             journal = Path(str(database) + "-journal")
             assert journal.exists() and mode(journal) == "0o600"
 
@@ -366,8 +366,15 @@ class TestPrivateFiles:
         private_dir(data_dir)
         private_sqlite(database)  # what AppointmentStore does before SQLite opens the file
         assert mode(data_dir) == "0o700" and mode(database) == "0o600" and mode(journal) == "0o600"
-        AppointmentStore(database, spec.business_path)
+        AppointmentStore(database, spec.business, spec.dev_calendar_path)
         assert mode(database) == "0o600"
+
+    def test_calcom_booking_map_is_private_too(self, umask_022, tmp_path, settings, owner_spec):
+        data_dir = tmp_path / "data"
+        app = create_app(replace(settings, data_dir=data_dir, calendar="calcom", cal_api_key="cal_test_not_real"), owner_spec,
+                         session_factory=NeverSession)
+        database = data_dir / "calendar.sqlite3"
+        assert app.state.manager.store.path == database and mode(data_dir) == "0o700" and mode(database) == "0o600"
 
     def test_capture_and_vendor_roots_are_private_under_umask_022(self, umask_022, tmp_path):
         for root in ("captures", "vendor"):

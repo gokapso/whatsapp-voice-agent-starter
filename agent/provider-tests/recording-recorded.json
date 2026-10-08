@@ -3,7 +3,9 @@
   "type": "llm",
   "dynamic_variables": {
     "today": "2026-11-02",
+    "weekday": "Monday",
     "timezone": "America/Chicago",
+    "business_name": "this business",
     "call_purpose": "inbound",
     "recording_status": "This call's audio is recorded and kept privately for quality review."
   },
@@ -11,7 +13,7 @@
     {
       "role": "agent",
       "time_in_call_secs": 0,
-      "message": "Hi, thanks for calling North Loop Bikes. I'm Riley, the shop's AI assistant. This call is recorded. How can I help?"
+      "message": "Hi, thanks for calling! This is Riley, the AI assistant. This call is recorded. How can I help you today?"
     },
     {
       "role": "user",

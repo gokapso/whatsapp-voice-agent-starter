@@ -1,0 +1,86 @@
+{
+  "_comment": "Development only (CALENDAR=local): an offline appointment book in DATA_DIR/appointments.sqlite3 for working without a Cal.com account, and the data the offline tests use. Bookings made here are not in any real calendar. Never use it to answer real callers.",
+  "timezone": "America/Chicago",
+  "weekly_slots": {
+    "tuesday": [
+      "10:00",
+      "11:00",
+      "12:00",
+      "13:00",
+      "15:00",
+      "16:00",
+      "17:00",
+      "18:00"
+    ],
+    "wednesday": [
+      "10:00",
+      "11:00",
+      "12:00",
+      "13:00",
+      "15:00",
+      "16:00",
+      "17:00",
+      "18:00"
+    ],
+    "thursday": [
+      "10:00",
+      "11:00",
+      "12:00",
+      "13:00",
+      "15:00",
+      "16:00",
+      "17:00",
+      "18:00"
+    ],
+    "friday": [
+      "10:00",
+      "11:00",
+      "12:00",
+      "13:00",
+      "15:00",
+      "16:00",
+      "17:00",
+      "18:00"
+    ],
+    "saturday": [
+      "10:00",
+      "11:00",
+      "12:00",
+      "13:00"
+    ]
+  },
+  "min_notice_minutes": 30,
+  "horizon_days": 30,
+  "services": [
+    {
+      "id": "consultation",
+      "name": "Consultation",
+      "minutes": 30,
+      "description": "A first conversation about what the caller needs."
+    },
+    {
+      "id": "follow_up",
+      "name": "Follow-up visit",
+      "minutes": 30,
+      "description": "For callers who have been here before."
+    },
+    {
+      "id": "extended",
+      "name": "Extended appointment",
+      "minutes": 60,
+      "description": "A longer visit when there is more to cover."
+    }
+  ],
+  "closures": [
+    {
+      "start": "2026-11-26",
+      "end": "2026-11-27",
+      "reason": "Closed for the Thanksgiving holiday"
+    },
+    {
+      "start": "2026-12-24",
+      "end": "2026-12-26",
+      "reason": "Closed for the winter holiday"
+    }
+  ]
+}

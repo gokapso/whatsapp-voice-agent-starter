@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import tomllib
 
+from .business import Business
 from .tools import provider_tool_definitions
 
 
@@ -25,6 +26,14 @@ class AgentSpec:
         return self.directory / self.raw["agent"]["business_file"]
 
     @property
+    def business(self):
+        return Business(self.business_path)
+
+    @property
+    def dev_calendar_path(self):
+        return self.directory / self.raw["agent"]["dev_calendar_file"]
+
+    @property
     def record_audio(self):
         return bool(self.raw["privacy"]["record_audio"])
 
@@ -36,8 +45,13 @@ class AgentSpec:
         """direction: inbound|outbound. recording: whether any audio recording applies to this call."""
         greetings = self.raw["greetings"]
         notice = " " + greetings["recording_notice"] if recording else ""
-        return greetings[direction].format(assistant=self.raw["agent"]["assistant_name"],
-                                           business=self.raw["agent"]["business_name"], recording=notice)
+        business = self.business.name
+        return greetings[direction].format(assistant=self.raw["agent"]["assistant_name"], business=business,
+                                           at_business=f" at {business}" if business else "", recording=notice)
+
+    def business_label(self):
+        """How the prompt names the business; a neutral phrase until business.json has a name."""
+        return self.business.name or "this business"
 
     def recording_status(self, recording):
         if recording:
@@ -46,7 +60,7 @@ class AgentSpec:
 
 
 REQUIRED = {
-    "agent": ["name", "assistant_name", "business_name", "language", "prompt_file", "business_file", "llm",
+    "agent": ["name", "assistant_name", "language", "prompt_file", "business_file", "dev_calendar_file", "llm",
               "temperature", "max_tokens"],
     "voice": ["voice_id", "tts_model", "speed", "stability", "expressive_mode"],
     "asr": ["provider"],
@@ -96,7 +110,8 @@ def build_config(spec, timezone):
                 # The AI (and recording) disclosure always plays in full.
                 "disable_first_message_interruptions": True,
                 "dynamic_variables": {"dynamic_variable_placeholders": {
-                    "today": "2026-01-01", "timezone": timezone, "call_purpose": "inbound",
+                    "today": "2026-01-01", "weekday": "Thursday", "timezone": timezone,
+                    "business_name": spec.business_label(), "call_purpose": "inbound",
                     "opening_message": spec.greeting("inbound", spec.record_audio),
                     "recording_status": spec.recording_status(spec.record_audio)}},
                 "prompt": {

@@ -13,14 +13,16 @@ WhatsApp caller ──(Meta WebRTC audio, UDP)───────────�
                                                          │
                                                 ElevenAgentBridge ──(WebSocket)──> ElevenLabs Agents
                                                          │                       (ASR + LLM + TTS)
-                                                   ToolRunner ─> SQLite (fictional bookings)
+                                                   ToolRunner ─(HTTPS)─> Cal.com (availability, bookings)
+                                                         └─> SQLite (which caller owns which booking)
 ```
 
 - HTTPS carries webhooks, SDP and call actions. Audio uses its own WebRTC path (ICE, maybe TURN).
 - ElevenLabs owns the conversation. Pipecat is only the audio transport and pipeline runner.
-- The current code handled one real English outbound WhatsApp call to a handset (2026-10-07; see
-  the README status). Inbound calls use the same bridge but were not part of that call. It does
-  not use Daily rooms or Pipecat Cloud.
+- This bridge and call handling carried one real English outbound WhatsApp call to a handset
+  (2026-10-07), with the earlier local booking tools; the Cal.com tools have not been on a real
+  call yet. Inbound calls use the same bridge but were not part of that call. It does not use
+  Daily rooms or Pipecat Cloud.
 
 ## Inbound call sequence
 
@@ -33,7 +35,8 @@ WhatsApp caller ──(Meta WebRTC audio, UDP)───────────�
    `pre_accept`, `accept` (20 s budget). Only then create the agent session, so the greeting
    is not spoken into a call that is not connected yet.
 4. The session sends `conversation_initiation_client_data` with per-call variables
-   (`opening_message`, `recording_status`, `today`, `timezone`, `call_purpose`).
+   (`opening_message`, `recording_status`, `today`, `weekday`, `timezone`, `business_name`,
+   `call_purpose`).
 5. End: the agent closes the conversation (end_call) → `terminate`; the caller hangs up →
    Meta `terminate` webhook cancels the task, no action sent; `MAX_SESSION_SECONDS` →
    `terminate`; failure before accept → `reject`.
@@ -61,7 +64,9 @@ whose outcome is unknown is reported, never retried.
 | `src/kapso_voice_agent/bridge.py` | Pipecat pipeline + ElevenLabs WebSocket protocol | `test_call_flow.py` |
 | `src/kapso_voice_agent/kapso.py` | Kapso call-action client | via flow tests |
 | `src/kapso_voice_agent/tools.py` | Tool schemas (source of truth) and dispatcher | `test_tools.py` |
-| `src/kapso_voice_agent/store.py` | SQLite appointment book, business facts | `test_tools.py` |
+| `src/kapso_voice_agent/calcom.py` | Cal.com calendar: availability, bookings, caller-to-booking map | `test_calcom.py` |
+| `src/kapso_voice_agent/business.py` | Owner's business facts, spoken day and time phrases | `test_tools.py`, `test_calcom.py` |
+| `src/kapso_voice_agent/store.py` | Local development calendar in SQLite (`CALENDAR=local`) | `test_tools.py` |
 | `src/kapso_voice_agent/agent_config.py` | agent.toml → provider config, greetings, read-back diff | `test_agent_config.py` |
 | `src/kapso_voice_agent/provider.py` | Dry-run/apply for ElevenLabs agent and Kapso webhook | `test_setup_and_artifacts.py` |
 | `src/kapso_voice_agent/recording.py` | Recording notice from the provider's stored setting + local capture | `test_privacy_and_retention.py` |
@@ -72,7 +77,7 @@ whose outcome is unknown is reported, never retried.
 | `src/kapso_voice_agent/config.py` | Environment settings and validation | `test_setup_and_artifacts.py` |
 | `src/kapso_voice_agent/fake_agent.py` | Offline agent stand-in for manual smoke tests | — |
 | `src/kapso_voice_agent/cli.py` | `voice-agent` commands | `test_setup_and_artifacts.py`, `test_privacy_and_retention.py` |
-| `agent/` | Editable prompt, settings, business data | `test_agent_config.py` |
+| `agent/` | Editable prompt, settings, business facts, development calendar data | `test_agent_config.py` |
 | `agent/provider-tests/` | Opt-in ElevenLabs agent tests (LLM-judged, run by the operator) | `test_agent_config.py` (shape only) |
 | `scripts/smoke_setup.py`, `smoke_local.py` | Development smoke checks with real processes, offline | run by hand |
 

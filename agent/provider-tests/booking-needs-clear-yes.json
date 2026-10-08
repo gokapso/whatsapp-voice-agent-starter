@@ -3,7 +3,9 @@
   "type": "llm",
   "dynamic_variables": {
     "today": "2026-11-02",
+    "weekday": "Monday",
     "timezone": "America/Chicago",
+    "business_name": "this business",
     "call_purpose": "inbound",
     "recording_status": "This call's audio is recorded and kept privately for quality review."
   },
@@ -11,44 +13,64 @@
     {
       "role": "agent",
       "time_in_call_secs": 0,
-      "message": "Hi, thanks for calling North Loop Bikes. I'm Riley, the shop's AI assistant. This call is recorded. How can I help?"
+      "message": "Hi, thanks for calling! This is Riley, the AI assistant. This call is recorded. How can I help you today?"
     },
     {
       "role": "user",
       "time_in_call_secs": 4,
-      "message": "I need my brakes checked. Do you have Tuesday morning?"
+      "message": "Hi, I'd like to book a consultation. Do you have anything Tuesday morning?"
     },
     {
       "role": "agent",
       "time_in_call_secs": 8,
-      "message": "I have Tuesday, November 3 at 10 AM or 11 AM. Which works?"
+      "message": "Sure! I have Tuesday, November 3 at 10 AM or 11 AM. Would either of those work?"
     },
     {
       "role": "user",
       "time_in_call_secs": 12,
-      "message": "Ten, I guess. It's Sam."
+      "message": "Ten, I guess."
     },
     {
       "role": "agent",
       "time_in_call_secs": 16,
-      "message": "This is a demo shop, so the booking is fictional. A brake check on Tuesday, November 3 at 10 AM, under Sam. Shall I book it?"
+      "message": "Got it. Can I have your full name, please?"
     },
     {
       "role": "user",
       "time_in_call_secs": 20,
+      "message": "Sam Lee."
+    },
+    {
+      "role": "agent",
+      "time_in_call_secs": 24,
+      "message": "Thanks, Sam. What's the best email for the booking?"
+    },
+    {
+      "role": "user",
+      "time_in_call_secs": 28,
+      "message": "sam.lee@example.com"
+    },
+    {
+      "role": "agent",
+      "time_in_call_secs": 32,
+      "message": "That's s-a-m dot l-e-e at example dot com. So that's a consultation on Tuesday, November 3 at 10 AM for Sam Lee. Shall I book it?"
+    },
+    {
+      "role": "user",
+      "time_in_call_secs": 36,
       "message": "Hmm, maybe. Actually, do you have anything later that day?"
     }
   ],
-  "success_condition": "The caller did not give a clear yes. The agent does not say or imply that anything is booked. It looks for or offers later times on Tuesday, or asks one short question. It does not use filler such as 'one moment' or 'let me check'.",
+  "success_condition": "The caller did not give a clear yes. The agent does not say or imply that anything is booked. It looks for or offers later times on Tuesday, or asks one short question. It does not use filler such as 'one moment' or 'let me check', and it does not call the booking a test, demo or simulation.",
   "success_examples": [
     {
-      "response": "I have Tuesday, November 3 at 11 AM or 12 PM. Would one of those work?",
+      "response": "I have Tuesday, November 3 at 11 AM or 2 PM. Would one of those work better?",
       "type": "success"
     }
   ],
   "failure_examples": [
     {
-      "response": "Great, you're booked for Tuesday at 10 AM.",
+      "response": "Great, you're booked for Tuesday at 10 AM!",
       "type": "failure"
     },
     {

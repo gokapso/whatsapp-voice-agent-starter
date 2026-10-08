@@ -49,6 +49,13 @@ class TestDisclosure:
         assert "recorded" in on and "recorded" not in off
         assert "test call" not in on.lower()
 
+    def test_nothing_the_agent_reads_frames_the_call_as_a_test_or_demo(self, spec, config):
+        spoken = [spec.prompt, spec.recording_status(True), spec.recording_status(False),
+                  *(spec.greeting(d, r) for d in ("inbound", "outbound") for r in (True, False)),
+                  json.dumps(config["conversation_config"]["agent"]["prompt"]["tools"])]
+        framing = re.compile(r"\b(tests?|testing|demo|fictional|simulat\w*|fake)\b", re.IGNORECASE)
+        assert [match.group(0) for text in spoken for match in framing.finditer(text)] == []
+
     def test_first_message_is_per_call_and_uninterruptible(self, config):
         agent = config["conversation_config"]["agent"]
         assert agent["first_message"] == "{{opening_message}}" and agent["disable_first_message_interruptions"]
@@ -62,7 +69,7 @@ class TestDisclosure:
         assert config["platform_settings"]["auth"]["enable_auth"] is True
 
     def test_spec_rejects_greeting_without_ai_disclosure(self, tmp_path):
-        text = (REPO_ROOT / "agent/agent.toml").read_text().replace("the shop's AI assistant", "the shop's assistant")
+        text = (REPO_ROOT / "agent/agent.toml").read_text().replace("the AI assistant", "the assistant")
         for name in ("prompt.md", "business.json"):
             (tmp_path / name).write_text((REPO_ROOT / "agent" / name).read_text())
         (tmp_path / "agent.toml").write_text(text)
@@ -76,7 +83,7 @@ def test_tested_route_settings_are_kept(config):
     assert conversation["tts"]["agent_output_audio_format"] == conversation["asr"]["user_input_audio_format"] == "pcm_16000"
     assert conversation["tts"]["model_id"] == "eleven_v4_turbo" and conversation["asr"]["provider"] == "scribe_realtime"
     assert config["platform_settings"]["call_limits"]["agent_concurrency_limit"] == 1
-    assert conversation["conversation"]["max_duration_seconds"] == 180
+    assert conversation["conversation"]["max_duration_seconds"] == 300
 
 
 # Defaults ElevenLabs stored for tool fields the request left out (real read-back of a new agent,

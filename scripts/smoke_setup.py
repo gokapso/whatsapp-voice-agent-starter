@@ -4,12 +4,12 @@
 Nothing from the caller's environment or any .env file reaches the server: the processes get only
 PATH, a temporary HOME and DATA_DIR, and the env files written by the commands under test.
 
-1. README step 1 before the ElevenLabs key: `voice-agent init` writes a private .env, `check`
-   reports only the ElevenLabs agent as missing, and `serve` prints the console URL (never a
-   secret) and refuses a browser call with a clear reason.
-2. docs/development.md: `dev init-env` + the offline fake agent + `serve`, then a browser-path
-   call over real HTTP/WebRTC that hears the fake agent's tone and runs one tool, hangup, and
-   private data permissions.
+1. README step 1 before the provider keys: `voice-agent init` writes a private .env, `check`
+   reports only the ElevenLabs agent and the calendar as missing, and `serve` prints the console
+   URL (never a secret) and refuses a browser call with a clear reason.
+2. docs/development.md: `dev init-env` + the offline fake agent + `serve` with the local
+   development calendar, then a browser-path call over real HTTP/WebRTC that hears the fake
+   agent's tone and runs one tool, hangup, and private data permissions.
 
 The fake agent plays a tone and echoes audio. This proves the media path and setup commands, not
 a conversation; the real conversation check is in docs/testing.md. Prints one JSON summary.
@@ -121,7 +121,8 @@ def main():
         dev = fake_agent_browser_call(temp, env)
     real_ok = (real["init_exit"] == 0 and real["init_printed_token"] and real["init_refuses_existing_file"]
                and real["env_file_mode"] == "0o600" and real["check_exit"] == 0
-               and real["check_missing"] == ["ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID (or DEV_AGENT_WS_URL)"]
+               and real["check_missing"] == ["ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID (or DEV_AGENT_WS_URL)",
+                                             "CAL_API_KEY (or CALENDAR=local for offline development)"]
                and any(line.startswith("Operator console: http://127.0.0.1:") for line in real["banner"])
                and real["banner_has_no_secret"] and real["agent_ready"] is False
                and real["browser_call_status"] == 503 and "ELEVENLABS_API_KEY" in real["browser_call_detail"])

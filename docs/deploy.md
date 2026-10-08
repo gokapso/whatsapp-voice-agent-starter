@@ -10,6 +10,8 @@ operator command with `--yes`, run after you read its dry-run output.
   messaging sandbox is not a Calling test number. Check Kapso's Calling setup guide for Meta's
   current eligibility rules.
 - An ElevenLabs account with Agents access, and the voice you want available to that account.
+- A Cal.com account with an event type for each service, and `agent/business.json` filled in
+  (`docs/calendar.md`).
 - A host for this server with a public HTTPS URL **and** a working media path (section 3).
 
 ## 2. Configure
@@ -18,8 +20,9 @@ On the host (or copy your tested `.env` there; it holds secrets, keep it 0600):
 
 ```sh
 uv run voice-agent init           # writes .env (0600) with OPERATOR_TOKEN, CALLER_KEY_SECRET, WHATSAPP_WEBHOOK_SECRET
-# set ELEVENLABS_API_KEY, KAPSO_API_KEY and WHATSAPP_PHONE_NUMBER_ID in .env
+# set ELEVENLABS_API_KEY, CAL_API_KEY, KAPSO_API_KEY and WHATSAPP_PHONE_NUMBER_ID in .env
 uv run voice-agent check          # offline; fix every reported problem
+uv run voice-agent calendar check # reads your Cal.com account; fix every reported problem
 ```
 
 `init` never overwrites an existing file. `voice-agent secrets` prints fresh values if you
@@ -32,6 +35,7 @@ manage the environment another way (for example a secret store feeding the conta
 | Webhooks from Kapso | HTTPS POST to `/webhooks/whatsapp` | Public HTTPS URL (reverse proxy, load balancer or tunnel) to port 8080 |
 | Call actions + SDP | This server → `https://api.kapso.ai` | Outbound HTTPS |
 | Agent conversation | This server → `wss://api.elevenlabs.io` | Outbound HTTPS/WSS |
+| Calendar | This server → `https://api.cal.com` | Outbound HTTPS |
 | **Call audio** | WebRTC (ICE/DTLS/SRTP over UDP) between Meta and this server | A reachable address for this server's media, or a TURN relay |
 
 An HTTPS tunnel for port 8080 delivers webhooks but **does not carry audio**. If the call

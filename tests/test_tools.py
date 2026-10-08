@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from conftest import tool_call
+from kapso_voice_agent.business import NOT_PROVIDED
 from kapso_voice_agent.store import MAX_OWN_BOOKINGS, AppointmentStore
 from kapso_voice_agent.tools import TOOLS, ToolRunner, provider_tool_definitions
 
@@ -18,15 +19,15 @@ def first_slot(store):
 
 
 def booking(store, **changes):
-    return {"slot": first_slot(store), "name": "Sam", "service_id": "brakes", "confirmed": True, **changes}
+    return {"slot": first_slot(store), "name": "Sam Lee", "service_id": "consultation", "confirmed": True, **changes}
 
 
 class TestBusinessInfo:
-    def test_all_topics_come_from_business_data(self, store):
+    def test_services_come_from_the_calendar_and_missing_facts_are_marked(self, store):
         data, error = result(ToolRunner(store, "a"), "business_info")
-        assert not error and data["business_name"] == "North Loop Bikes"
-        assert {s["id"] for s in data["services"]} >= {"brakes", "general_checkup"}
-        assert data["weekly_hours"]["monday"] == []
+        assert not error and {s["id"] for s in data["services"]} == {"consultation", "follow_up", "extended"}
+        # The shipped business.json is an empty template: nothing is invented to fill it.
+        assert data["business_name"] == NOT_PROVIDED and data["hours"] == NOT_PROVIDED and data["policies"] == NOT_PROVIDED
 
     def test_unknown_topic_is_rejected_by_schema(self, store):
         data, error = result(ToolRunner(store, "a"), "business_info", {"topic": "salaries"})
@@ -38,7 +39,7 @@ class TestAvailability:
         data, error = result(ToolRunner(store, "a"), "available_slots")
         assert not error and len(data["slots"]) == 2 and data["has_more"] is True
         assert data["slots"][0] == {"slot": "2026-11-03T10:00:00-06:00", "when": "Tuesday, November 3 at 10 AM"}
-        assert data["timezone"] == "America/Chicago"
+        assert data["timezone"] == "America/Chicago" and data["needs_email"] is False
 
     def test_requested_day_is_echoed_with_its_weekday(self, store):
         data, _ = result(ToolRunner(store, "a"), "available_slots", {"day": "2026-11-07"})
@@ -47,19 +48,19 @@ class TestAvailability:
 
     def test_closed_day_gives_reason_and_next_open_day(self, store):
         data, error = result(ToolRunner(store, "a"), "available_slots", {"day": "2026-11-26"})
-        assert not error and data["open"] is False and data["closed_reason"] == "Thanksgiving holiday"
+        assert not error and data["open"] is False and data["closed_reason"] == "Closed for the Thanksgiving holiday"
         assert data["slots"] == [] and data["day_spoken"] == "Thursday, November 26"
         assert data["next_open_day"] == "2026-11-28" and data["next_open_day_spoken"] == "Saturday, November 28"
 
     def test_weekly_closed_day_names_the_weekday(self, store):
         data, _ = result(ToolRunner(store, "a"), "available_slots", {"day": "2026-11-08"})
-        assert data["open"] is False and data["closed_reason"] == "Closed on Sundays"
+        assert data["open"] is False and data["closed_reason"] == "No appointments on Sundays"
         assert data["next_open_day_spoken"] == "Tuesday, November 10"
 
     def test_fully_booked_day_points_at_the_next_free_time(self, store):
         saturday = [s for s in store.slot_inventory() if s.startswith("2026-11-07")]
         with store.connect() as db:
-            db.executemany("INSERT INTO appointments VALUES (?, ?, 'b', 'Ana', 'brakes', '', 'now')",
+            db.executemany("INSERT INTO appointments VALUES (?, ?, 'b', 'Ana', 'consultation', '', 'now')",
                            [(f"FULL{i}", slot) for i, slot in enumerate(saturday)])
         data, error = result(ToolRunner(store, "a"), "available_slots", {"day": "2026-11-07"})
         assert not error and data["open"] is True and data["slots"] == [] and data["has_more"] is False
@@ -123,11 +124,11 @@ class TestBooking:
         data, error = result(ToolRunner(store, "b"), "book_appointment", args)
         assert error and data["code"] == "slot_taken"
 
-    def test_success_result_says_when_and_is_marked_fictional(self, store):
+    def test_success_result_says_when_without_any_disclaimer(self, store):
         data, error = result(ToolRunner(store, "a"), "book_appointment", booking(store))
-        assert not error and data["status"] == "booked" and data["fictional"] is True
+        assert not error and data["status"] == "booked" and "fictional" not in data
         assert data["when"] == "Tuesday, November 3 at 10 AM" and data["timezone"] == "America/Chicago"
-        assert data["service_name"] == "Brake check and adjustment" and data["name"] == "Sam"
+        assert data["service_name"] == "Consultation" and data["name"] == "Sam Lee"
 
     def test_stale_slot_is_recoverable_with_a_fresh_lookup(self, store):
         """The flow the prompt asks for: slot_taken -> available_slots again -> book a new time."""
@@ -144,8 +145,8 @@ class TestBooking:
 
     def test_failures_name_how_to_correct_them(self, store):
         runner = ToolRunner(store, "a")
-        unknown, _ = result(runner, "book_appointment", booking(store, service_id="Brake check"), "u1")
-        assert unknown["code"] == "unknown_service" and "brakes" in unknown["message"] and "general_checkup" in unknown["message"]
+        unknown, _ = result(runner, "book_appointment", booking(store, service_id="Consultation"), "u1")
+        assert unknown["code"] == "unknown_service" and "consultation" in unknown["message"] and "follow_up" in unknown["message"]
         unconfirmed, _ = result(runner, "book_appointment", booking(store, confirmed=False), "u2")
         assert unconfirmed["message"].startswith("Not booked.") and "confirmed=true" in unconfirmed["message"]
 
@@ -184,6 +185,31 @@ class TestCallerIsolation:
             ToolRunner(store, "")
 
 
+class TestReschedule:
+    def test_moves_only_own_booking_after_a_clear_yes(self, store):
+        own, other = ToolRunner(store, "caller-a"), ToolRunner(store, "caller-b")
+        booked, _ = result(own, "book_appointment", booking(store), "b1")
+        new_slot = store.availability()["slots"][0]["slot"]
+        move = {"booking_id": booked["id"], "slot": new_slot}
+        data, error = result(own, "reschedule_appointment", {**move, "confirmed": False}, "r1")
+        assert error and data["code"] == "confirmation_required"
+        data, error = result(other, "reschedule_appointment", {**move, "confirmed": True}, "r2")
+        assert error and data["code"] == "not_found"
+        data, error = result(own, "reschedule_appointment", {**move, "confirmed": True}, "r3")
+        assert not error and data["status"] == "rescheduled" and data["slot"] == new_slot and data["id"] == booked["id"]
+        assert [a["slot"] for a in store.list_own("caller-a")["appointments"]] == [new_slot]
+
+    def test_a_taken_time_is_refused_and_the_old_time_is_kept(self, store):
+        own = ToolRunner(store, "caller-a")
+        booked, _ = result(own, "book_appointment", booking(store), "b1")
+        taken = booking(store)
+        result(ToolRunner(store, "caller-b"), "book_appointment", taken, "b2")
+        data, error = result(own, "reschedule_appointment",
+                             {"booking_id": booked["id"], "slot": taken["slot"], "confirmed": True}, "r1")
+        assert error and data["code"] == "slot_taken"
+        assert [a["slot"] for a in store.list_own("caller-a")["appointments"]] == [booked["slot"]]
+
+
 def test_store_errors_become_tool_data_not_crashes(store, monkeypatch):
     monkeypatch.setattr(store, "list_own", lambda caller: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
     data, error = result(ToolRunner(store, "a"), "my_appointments")
@@ -194,7 +220,7 @@ class TestBoundedQueries:
     def test_own_bookings_are_capped(self, store):
         slots = store.slot_inventory()[:MAX_OWN_BOOKINGS + 3]
         with store.connect() as db:
-            db.executemany("INSERT INTO appointments VALUES (?, ?, 'a', 'Sam', 'brakes', '', 'now')",
+            db.executemany("INSERT INTO appointments VALUES (?, ?, 'a', 'Sam', 'consultation', '', 'now')",
                            [(f"ID{i}", slot) for i, slot in enumerate(slots)])
         rows = store.list_own("a")["appointments"]
         assert len(rows) == MAX_OWN_BOOKINGS and [r["slot"] for r in rows] == slots[:MAX_OWN_BOOKINGS]
@@ -220,9 +246,9 @@ def test_provider_tool_definitions_match_runner_and_have_no_filler(spec):
             assert name not in definition["parameters"]["properties"]
 
 
-def test_fresh_store_builds_from_business_data(tmp_path, spec):
-    store = AppointmentStore(tmp_path / "new.sqlite3", spec.business_path)
-    assert store.info("hours")["timezone"] == "America/Chicago"
+def test_fresh_store_builds_from_the_development_calendar(tmp_path, spec):
+    store = AppointmentStore(tmp_path / "new.sqlite3", spec.business, spec.dev_calendar_path)
+    assert str(store.timezone) == "America/Chicago" and store.info("hours") == {"ok": True, "hours": NOT_PROVIDED}
 
 
 def test_every_failure_code_the_tools_return_has_a_recovery_rule_in_the_prompt(store, spec, monkeypatch):

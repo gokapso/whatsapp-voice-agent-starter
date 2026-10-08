@@ -22,6 +22,7 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.workers.runner import WorkerRunner
 from websockets.asyncio.client import connect
 
+from .business import WEEKDAYS
 from .capture import LocalCapture
 from .tools import TOOLS, ToolRunner
 
@@ -185,8 +186,10 @@ class ElevenAgentBridge(FrameProcessor):
 def session_context(settings, spec, store, direction, recording):
     """Per-call values sent to the agent. `recording` is the verified state from recording.py,
     so the greeting mentions recording only when it really applies."""
+    today = store.now().date()
     return {"settings": settings, "dynamic_variables": {
-        "today": store.now().date().isoformat(), "timezone": str(store.timezone),
+        "today": today.isoformat(), "weekday": WEEKDAYS[today.weekday()].capitalize(), "timezone": str(store.timezone),
+        "business_name": spec.business_label(),
         "call_purpose": "outbound_appointment_confirmation" if direction == "outbound" else "inbound",
         "opening_message": spec.greeting(direction, recording.recorded),
         "recording_status": spec.recording_status(recording.recorded)}}

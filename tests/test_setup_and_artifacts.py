@@ -14,13 +14,12 @@ from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.workers.runner import WorkerRunner
 import pytest
 
+from conftest import configured_agent
 from kapso_voice_agent import artifacts, cli, config, provider
-from kapso_voice_agent.agent_config import build_config, load_spec
-from kapso_voice_agent.app import create_app
+from kapso_voice_agent.agent_config import build_config
 from kapso_voice_agent.capture import LocalCapture
 from kapso_voice_agent.config import ConfigError, load_settings
 from kapso_voice_agent.private import CAPTURE_DIR, VENDOR_DIR, prune
-from kapso_voice_agent.tools import ToolRunner
 
 
 def refuse_network(monkeypatch):
@@ -35,7 +34,7 @@ def refuse_network(monkeypatch):
 def env_file(tmp_path):
     path = tmp_path / ".env"
     path.write_text("KAPSO_API_KEY=kapso-secret-value\nWHATSAPP_PHONE_NUMBER_ID=100000000000001\n"
-                    "WHATSAPP_WEBHOOK_SECRET=webhook-secret-value\nELEVENLABS_API_KEY=eleven-secret-value\n")
+                    "WHATSAPP_WEBHOOK_SECRET=webhook-secret-value\nELEVENLABS_API_KEY=eleven-secret-value\nCALENDAR=local\n")
     return str(path)
 
 
@@ -134,7 +133,8 @@ class TestSettings:
 
 def clean_provider_env(monkeypatch):
     for key in list(os.environ):
-        if key.startswith(("KAPSO_", "ELEVENLABS_", "WHATSAPP_", "OPERATOR_", "CALLER_", "DEV_AGENT_")):
+        if key.startswith(("KAPSO_", "ELEVENLABS_", "WHATSAPP_", "OPERATOR_", "CALLER_", "DEV_AGENT_", "CAL_", "CALENDAR",
+                           "AGENT_CONFIG_PATH", "DATA_DIR")):
             monkeypatch.delenv(key)
 
 
@@ -156,9 +156,10 @@ class TestInit:
         assert settings.caller_key_secret not in printed and settings.webhook_secret not in printed
         assert not (settings.elevenlabs_api_key or settings.elevenlabs_agent_id or settings.kapso_api_key
                     or settings.phone_number_id or settings.dev_agent_ws_url)
-        # Only the ElevenLabs key and agent stand between this file and a browser call.
-        assert settings.agent_missing() == ["ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID (or DEV_AGENT_WS_URL)"]
-        assert "--save-agent-id" in printed
+        # Only the ElevenLabs agent and a calendar stand between this file and a browser call.
+        assert settings.agent_missing() == ["ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID (or DEV_AGENT_WS_URL)",
+                                            "CAL_API_KEY (or CALENDAR=local for offline development)"]
+        assert "--save-agent-id" in printed and "calendar check" in printed
 
     def test_never_overwrites_an_existing_file_or_symlink(self, tmp_path, monkeypatch):
         clean_provider_env(monkeypatch)
@@ -185,8 +186,11 @@ class TestSaveAgentId:
     @pytest.fixture
     def env(self, tmp_path, monkeypatch):
         clean_provider_env(monkeypatch)
-        path = tmp_path / ".env"
+        path = tmp_path / "project" / ".env"
+        path.parent.mkdir()
         cli.main(["--env-file", str(path), "init"])
+        # The owner has filled in business.json (its time zone is in the agent config).
+        monkeypatch.setenv("AGENT_CONFIG_PATH", str(configured_agent(tmp_path / "agent")))
         path.write_text(path.read_text().replace("ELEVENLABS_API_KEY=\n", "ELEVENLABS_API_KEY=eleven-secret-value\n"))
         return path
 
@@ -277,42 +281,23 @@ class TestSaveAgentId:
 
 
 class TestAcceptanceGuide:
-    """docs/testing.md level 2, line by line: the acceptance env has its own DATA_DIR, and the
-    stale-slot commands write to the store of the server started from that env."""
+    """docs/testing.md level 2, line by line: the acceptance env has its own DATA_DIR, so its
+    caller-to-booking map and downloads stay apart from data/."""
 
-    def test_acceptance_data_dir_is_separate_and_stale_slot_commands_use_the_server_store(self, tmp_path, monkeypatch,
-                                                                                          capsys):
+    def test_acceptance_data_dir_is_separate_from_the_normal_one(self, tmp_path, monkeypatch):
         clean_provider_env(monkeypatch)
-        for key in ("DATA_DIR", "AGENT_CONFIG_PATH"):
-            monkeypatch.delenv(key, raising=False)
         level2 = (cli.REPO_ROOT / "docs/testing.md").read_text().split("## Level 2", 1)[1].split("\n## ", 1)[0]
         [data_dir_line] = re.findall(r"^echo '(DATA_DIR=[^']+)' >> \.env\.acceptance", level2, re.MULTILINE)
-        databases = re.findall(r"--db (\S+)", level2)
-        # The commands run from the repository root. A temporary root keeps real data/ untouched.
+        assert "--db" not in level2  # acceptance runs against the real calendar, not the development one
         monkeypatch.setattr(config, "REPO_ROOT", tmp_path)
         (tmp_path / "agent").symlink_to(cli.REPO_ROOT / "agent")
         env = tmp_path / ".env.acceptance"
         cli.main(["--env-file", str(env), "init"])
         with env.open("a") as out:
-            out.write(data_dir_line + "\n")
+            out.write(data_dir_line + "\nCAL_API_KEY=cal_test_not_real\n")
         settings = load_settings(env_file=env)
-        assert settings.data_dir == tmp_path / "data/acceptance-riley"
+        assert settings.data_dir == tmp_path / "data/acceptance-riley" and settings.calendar == "calcom"
         assert settings.data_dir != load_settings(environ={}).data_dir == tmp_path / "data"
-
-        server_store = create_app(settings, spec=load_spec(cli.REPO_ROOT / "agent/agent.toml")).state.manager.store
-        assert len(databases) == 2 and {tmp_path / db for db in databases} == {server_store.path}
-        capsys.readouterr()
-        monkeypatch.chdir(tmp_path)
-        cli.main(["--env-file", str(env), "tools", "call", "available_slots", "{}", "--db", databases[0]])
-        slot = json.loads(capsys.readouterr().out)["slots"][0]["slot"]
-        cli.main(["--env-file", str(env), "tools", "call", "book_appointment",
-                  json.dumps({"slot": slot, "name": "Other", "service_id": "brakes", "confirmed": True}),
-                  "--db", databases[1], "--caller", "someone-else"])
-        result = ToolRunner(server_store, "browser:caller").execute({
-            "tool_name": "book_appointment", "tool_call_id": "stale-1",
-            "parameters": {"slot": slot, "name": "Riley Test", "service_id": "brakes", "confirmed": True}})
-        assert json.loads(result["result"])["code"] == "slot_taken"
-        assert not (tmp_path / "data/appointments.sqlite3").exists()
 
     @pytest.mark.parametrize("guide", ["README.md", "docs/deploy.md", "docs/testing.md"])
     def test_guides_save_the_agent_id_before_starting_the_server(self, guide):
@@ -330,6 +315,7 @@ class TestServeBanner:
         text = "\n".join(lines)
         assert "Operator console: http://127.0.0.1:8080/operator/" in text
         assert "Browser calls: ready" in text and "WhatsApp calls: ready" in text
+        assert "Calendar: local development calendar (bookings stay in DATA_DIR; not for real callers)" in text
         for secret in (settings.operator_token, settings.webhook_secret, settings.kapso_api_key, settings.elevenlabs_api_key):
             assert secret not in text
 
@@ -343,15 +329,17 @@ class TestServeBanner:
         assert "Operator console: off" in off
 
 
-def test_offline_tool_workflow_books_and_lists(tmp_path, capsys):
+def test_offline_tool_workflow_books_and_lists(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("CALENDAR", "local")
+    monkeypatch.delenv("CAL_API_KEY", raising=False)
     common = ["--db", str(tmp_path / "tools.sqlite3"), "--now", "2026-11-02T09:00:00-06:00"]
     cli.main(["tools", "call", "available_slots", "{}", *common])
     slot = json.loads(capsys.readouterr().out)["slots"][0]["slot"]
     with pytest.raises(SystemExit):
-        cli.main(["tools", "call", "book_appointment", json.dumps({"slot": slot, "name": "Sam", "service_id": "brakes",
+        cli.main(["tools", "call", "book_appointment", json.dumps({"slot": slot, "name": "Sam Lee", "service_id": "consultation",
                                                                    "confirmed": False}), *common])
     capsys.readouterr()
-    cli.main(["tools", "call", "book_appointment", json.dumps({"slot": slot, "name": "Sam", "service_id": "brakes",
+    cli.main(["tools", "call", "book_appointment", json.dumps({"slot": slot, "name": "Sam Lee", "service_id": "consultation",
                                                                "confirmed": True}), *common])
     assert json.loads(capsys.readouterr().out)["status"] == "booked"
     cli.main(["tools", "call", "my_appointments", "{}", "--caller", "someone-else", *common])
