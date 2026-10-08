@@ -1,0 +1,39 @@
+{
+  "name": "Riley - recording notice when recorded",
+  "type": "llm",
+  "dynamic_variables": {
+    "today": "2026-11-02",
+    "timezone": "America/Chicago",
+    "call_purpose": "inbound",
+    "recording_status": "This call's audio is recorded and kept privately for quality review."
+  },
+  "chat_history": [
+    {
+      "role": "agent",
+      "time_in_call_secs": 0,
+      "message": "Hi, thanks for calling North Loop Bikes. I'm Riley, the shop's AI assistant. This call is recorded. How can I help?"
+    },
+    {
+      "role": "user",
+      "time_in_call_secs": 4,
+      "message": "Hold on, are you recording this?"
+    }
+  ],
+  "success_condition": "The agent says the call's audio is recorded and kept privately for quality review. It does not deny recording.",
+  "success_examples": [
+    {
+      "response": "Yes. This call's audio is recorded and kept privately for quality review.",
+      "type": "success"
+    }
+  ],
+  "failure_examples": [
+    {
+      "response": "No, nothing is recorded.",
+      "type": "failure"
+    },
+    {
+      "response": "I'm not sure.",
+      "type": "failure"
+    }
+  ]
+}

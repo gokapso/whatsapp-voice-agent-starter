@@ -1,0 +1,37 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "200000000000001",
+      "changes": [
+        {
+          "field": "calls",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550100000",
+              "phone_number_id": "100000000000001"
+            },
+            "calls": [
+              {
+                "id": "wacid.SYNTHETIC-INBOUND-1",
+                "event": "call_transcript_available",
+                "timestamp": "1793000210",
+                "from_user_id": "US.100000000000000001",
+                "call_transcript": {
+                  "type": "document",
+                  "document": {
+                    "id": "9000000000000002",
+                    "sha256": "c3ludGhldGljLWNoZWNrc3Vt",
+                    "mime_type": "application/json",
+                    "url": "https://media.example.invalid/synthetic"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

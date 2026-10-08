@@ -1,0 +1,29 @@
+# Local or single-host deployment. See docs/deploy.md.
+#
+# Media: aiortc picks random UDP ports and advertises the addresses it sees. Inside Docker's
+# default bridge network those are private container addresses that Meta cannot reach, and
+# there is no port range to publish. Use ONE of:
+#   - network_mode: host on a Linux host with a public IP (uncomment below), or
+#   - a TURN server in ICE_SERVERS_JSON so media relays through it.
+# Publishing 8080 only carries webhooks/SDP and the console. A tunnel for 8080 alone does not
+# carry audio.
+services:
+  voice-agent:
+    build: .
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+    ports:
+      - "127.0.0.1:8080:8080"   # put your HTTPS reverse proxy / tunnel in front of this
+    # network_mode: host       # Linux only; remove `ports` when you use this
+    volumes:
+      - voice-agent-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+volumes:
+  voice-agent-data:

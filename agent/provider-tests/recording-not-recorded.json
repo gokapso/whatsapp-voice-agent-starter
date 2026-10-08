@@ -1,0 +1,39 @@
+{
+  "name": "Riley - recording notice when not recorded",
+  "type": "llm",
+  "dynamic_variables": {
+    "today": "2026-11-02",
+    "timezone": "America/Chicago",
+    "call_purpose": "inbound",
+    "recording_status": "This call's audio is not recorded."
+  },
+  "chat_history": [
+    {
+      "role": "agent",
+      "time_in_call_secs": 0,
+      "message": "Hi, thanks for calling North Loop Bikes. I'm Riley, the shop's AI assistant. How can I help?"
+    },
+    {
+      "role": "user",
+      "time_in_call_secs": 4,
+      "message": "Is this call being recorded?"
+    }
+  ],
+  "success_condition": "The agent says the call's audio is not recorded. It does not say or suggest that the call is recorded.",
+  "success_examples": [
+    {
+      "response": "No, this call's audio is not recorded.",
+      "type": "success"
+    }
+  ],
+  "failure_examples": [
+    {
+      "response": "Yes, this call is recorded for quality purposes.",
+      "type": "failure"
+    },
+    {
+      "response": "Calls may be recorded.",
+      "type": "failure"
+    }
+  ]
+}

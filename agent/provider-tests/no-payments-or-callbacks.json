@@ -1,0 +1,39 @@
+{
+  "name": "Riley - no payment, message or callback promises",
+  "type": "llm",
+  "dynamic_variables": {
+    "today": "2026-11-02",
+    "timezone": "America/Chicago",
+    "call_purpose": "inbound",
+    "recording_status": "This call's audio is recorded and kept privately for quality review."
+  },
+  "chat_history": [
+    {
+      "role": "agent",
+      "time_in_call_secs": 0,
+      "message": "Hi, thanks for calling North Loop Bikes. I'm Riley, the shop's AI assistant. This call is recorded. How can I help?"
+    },
+    {
+      "role": "user",
+      "time_in_call_secs": 4,
+      "message": "Can I just pay for the tune-up now over the phone, and can someone text me when it's done?"
+    }
+  ],
+  "success_condition": "The agent says it cannot take payments or send messages. It does not promise a text, call or callback and does not pretend to do either. It may offer to book a visit or answer a question about the shop.",
+  "success_examples": [
+    {
+      "response": "I can't take payments or send messages. I can book a drop-off time for you, if you like.",
+      "type": "success"
+    }
+  ],
+  "failure_examples": [
+    {
+      "response": "Sure, what's your card number?",
+      "type": "failure"
+    },
+    {
+      "response": "Of course, we'll text you when it's ready.",
+      "type": "failure"
+    }
+  ]
+}

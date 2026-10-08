@@ -1,0 +1,175 @@
+{
+  "_comment": "Fictional demo business. Replace with your own facts; the agent only states what is here.",
+  "fictional": true,
+  "business_name": "North Loop Bikes",
+  "description": "A small neighborhood bike shop: tune-ups, repairs and assembly for city, road, mountain and electric bikes (mechanical work only).",
+  "timezone": "America/Chicago",
+  "location": {
+    "address": "1450 Spoke Lane (fictional address)",
+    "landmark": "Two blocks from the train station",
+    "parking": "Leave your bike by the front door while you are helped."
+  },
+  "contact": {
+    "email": "hello@northloop.example",
+    "note": "The assistant does not send messages or emails."
+  },
+  "weekly_hours": {
+    "monday": [],
+    "tuesday": [
+      [
+        "10:00",
+        "14:00"
+      ],
+      [
+        "15:00",
+        "19:00"
+      ]
+    ],
+    "wednesday": [
+      [
+        "10:00",
+        "14:00"
+      ],
+      [
+        "15:00",
+        "19:00"
+      ]
+    ],
+    "thursday": [
+      [
+        "10:00",
+        "14:00"
+      ],
+      [
+        "15:00",
+        "19:00"
+      ]
+    ],
+    "friday": [
+      [
+        "10:00",
+        "14:00"
+      ],
+      [
+        "15:00",
+        "19:00"
+      ]
+    ],
+    "saturday": [
+      [
+        "10:00",
+        "14:00"
+      ]
+    ],
+    "sunday": []
+  },
+  "appointments": {
+    "kind": "Drop-off and assessment",
+    "length_minutes": 60,
+    "explanation": "Each appointment is a 60-minute drop-off and assessment. Longer jobs keep the bike at the shop; the pickup date is given in person.",
+    "slot_starts": {
+      "tuesday": [
+        "10:00",
+        "11:00",
+        "12:00",
+        "13:00",
+        "15:00",
+        "16:00",
+        "17:00",
+        "18:00"
+      ],
+      "wednesday": [
+        "10:00",
+        "11:00",
+        "12:00",
+        "13:00",
+        "15:00",
+        "16:00",
+        "17:00",
+        "18:00"
+      ],
+      "thursday": [
+        "10:00",
+        "11:00",
+        "12:00",
+        "13:00",
+        "15:00",
+        "16:00",
+        "17:00",
+        "18:00"
+      ],
+      "friday": [
+        "10:00",
+        "11:00",
+        "12:00",
+        "13:00",
+        "15:00",
+        "16:00",
+        "17:00",
+        "18:00"
+      ],
+      "saturday": [
+        "10:00",
+        "11:00",
+        "12:00",
+        "13:00"
+      ]
+    },
+    "min_notice_minutes": 30,
+    "horizon_days": 30
+  },
+  "services": [
+    {
+      "id": "general_checkup",
+      "name": "General check-up",
+      "minutes": 60,
+      "description": "Inspection, basic brake and gear adjustment, tire pressure and chain lube. Good when you are not sure what is wrong."
+    },
+    {
+      "id": "full_service",
+      "name": "Full service",
+      "minutes": 180,
+      "description": "Drivetrain, hub and headset cleaning and greasing plus a general tune. The bike usually stays at the shop."
+    },
+    {
+      "id": "brakes",
+      "name": "Brake check and adjustment",
+      "minutes": 45,
+      "description": "Rim or disc brake adjustment, and new pads if needed."
+    },
+    {
+      "id": "flat_repair",
+      "name": "Flat tire repair",
+      "minutes": 30,
+      "description": "Patch or replace the inner tube and check the tire."
+    },
+    {
+      "id": "gears",
+      "name": "Gear adjustment",
+      "minutes": 45,
+      "description": "Derailleur tuning and cable check so gears stop skipping."
+    },
+    {
+      "id": "ebike_checkup",
+      "name": "E-bike mechanical check-up",
+      "minutes": 90,
+      "description": "Brakes, drivetrain, wheels and visible connections. Battery and motor repair are not included."
+    }
+  ],
+  "policies": {
+    "pricing": "Prices are given at the shop after the bike is assessed. The assistant does not quote prices by phone.",
+    "what_to_bring": "The bike. For e-bikes, bring the charger too."
+  },
+  "closures": [
+    {
+      "start": "2026-11-26",
+      "end": "2026-11-27",
+      "reason": "Thanksgiving holiday"
+    },
+    {
+      "start": "2026-12-24",
+      "end": "2026-12-26",
+      "reason": "Winter holiday"
+    }
+  ]
+}

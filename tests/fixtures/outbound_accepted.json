@@ -1,0 +1,29 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "200000000000001",
+      "changes": [
+        {
+          "field": "calls",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550100000",
+              "phone_number_id": "100000000000001"
+            },
+            "statuses": [
+              {
+                "id": "wacid.SYNTHETIC-OUTBOUND-1",
+                "type": "call",
+                "status": "ACCEPTED",
+                "timestamp": "1793000105",
+                "recipient_id": "15550100002"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

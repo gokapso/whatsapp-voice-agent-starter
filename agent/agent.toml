@@ -1,0 +1,57 @@
+# ElevenLabs Agents settings for the example assistant. Edit freely.
+#
+# `voice-agent agent plan` renders this file, prompt.md and the tool schemas in
+# src/kapso_voice_agent/tools.py into build/agent-config.json without network access.
+# Nothing is sent to ElevenLabs unless an operator runs `voice-agent agent apply --yes`.
+
+[agent]
+# Provider-side name. `agent apply` refuses to update an existing agent whose name differs.
+name = "North Loop Bikes - Riley (Kapso voice agent starter)"
+assistant_name = "Riley"
+business_name = "North Loop Bikes"
+language = "en"
+prompt_file = "prompt.md"
+business_file = "business.json"
+llm = "gpt-4.1"
+temperature = 0.3
+max_tokens = 300
+tags = ["kapso", "voice-agent-starter", "english"]
+
+[voice]
+# "River" is an ElevenLabs premade voice. It was the voice in one tested handset call;
+# it is an example, not a recommendation. Confirm it is available to your account first.
+voice_id = "SAz9YHcvj6GT2YYXdXww"
+tts_model = "eleven_v4_turbo"
+speed = 0.95
+stability = 0.5
+# Expressive audio tags add laughs, sighs and other performed sounds. Off by default.
+expressive_mode = false
+
+[asr]
+provider = "scribe_realtime"
+keywords = ["North Loop", "Riley", "tune-up", "derailleur", "e-bike"]
+
+[turn]
+turn_timeout = 15
+silence_end_call_timeout = 45
+turn_eagerness = "patient"
+
+[limits]
+# The bridge also enforces MAX_SESSION_SECONDS; keep it a little above this value.
+max_duration_seconds = 180
+concurrency_limit = 1
+daily_limit = 10
+
+[privacy]
+# true: ElevenLabs keeps the call audio for retention_days. At call time the server reads the
+# stored agent's setting back and the greeting says the call is recorded only if that stored
+# setting (or LOCAL_CAPTURE=1 on the server) is on. Run `agent apply --yes` after changing it.
+record_audio = true
+retention_days = 7
+
+[greetings]
+# {assistant} and {business} come from [agent]. {recording} becomes recording_notice
+# (with a leading space) when recording applies, or nothing when it does not.
+inbound = "Hi, thanks for calling {business}. I'm {assistant}, the shop's AI assistant.{recording} How can I help?"
+outbound = "Hi, this is {assistant}, the AI assistant from {business}.{recording} Is now a good time to talk about your appointment?"
+recording_notice = "This call is recorded."

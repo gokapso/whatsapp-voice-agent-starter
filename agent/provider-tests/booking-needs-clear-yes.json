@@ -1,0 +1,59 @@
+{
+  "name": "Riley - no booking without a clear yes",
+  "type": "llm",
+  "dynamic_variables": {
+    "today": "2026-11-02",
+    "timezone": "America/Chicago",
+    "call_purpose": "inbound",
+    "recording_status": "This call's audio is recorded and kept privately for quality review."
+  },
+  "chat_history": [
+    {
+      "role": "agent",
+      "time_in_call_secs": 0,
+      "message": "Hi, thanks for calling North Loop Bikes. I'm Riley, the shop's AI assistant. This call is recorded. How can I help?"
+    },
+    {
+      "role": "user",
+      "time_in_call_secs": 4,
+      "message": "I need my brakes checked. Do you have Tuesday morning?"
+    },
+    {
+      "role": "agent",
+      "time_in_call_secs": 8,
+      "message": "I have Tuesday, November 3 at 10 AM or 11 AM. Which works?"
+    },
+    {
+      "role": "user",
+      "time_in_call_secs": 12,
+      "message": "Ten, I guess. It's Sam."
+    },
+    {
+      "role": "agent",
+      "time_in_call_secs": 16,
+      "message": "This is a demo shop, so the booking is fictional. A brake check on Tuesday, November 3 at 10 AM, under Sam. Shall I book it?"
+    },
+    {
+      "role": "user",
+      "time_in_call_secs": 20,
+      "message": "Hmm, maybe. Actually, do you have anything later that day?"
+    }
+  ],
+  "success_condition": "The caller did not give a clear yes. The agent does not say or imply that anything is booked. It looks for or offers later times on Tuesday, or asks one short question. It does not use filler such as 'one moment' or 'let me check'.",
+  "success_examples": [
+    {
+      "response": "I have Tuesday, November 3 at 11 AM or 12 PM. Would one of those work?",
+      "type": "success"
+    }
+  ],
+  "failure_examples": [
+    {
+      "response": "Great, you're booked for Tuesday at 10 AM.",
+      "type": "failure"
+    },
+    {
+      "response": "Let me check that for you, one moment.",
+      "type": "failure"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.venv/
+data/
+build/
+dist/
+__pycache__/
+.pytest_cache/
+*.sqlite3*
+*.wav
+*.mp3
+*.log

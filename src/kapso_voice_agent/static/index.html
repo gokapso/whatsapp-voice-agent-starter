@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Voice agent operator console</title>
+<style>
+body{font:16px system-ui,sans-serif;max-width:680px;margin:6vh auto;padding:0 20px;color:#1f2a24;background:#f6f5f1}
+h1{font-size:30px;margin-bottom:4px}h2{font-size:19px;margin-top:32px}
+p,li{line-height:1.5}button{font:inherit;border:0;border-radius:8px;padding:10px 16px;background:#24513a;color:#fff;cursor:pointer;margin:4px 8px 4px 0}
+button:disabled{opacity:.4;cursor:default}input{font:inherit;padding:9px;border:1px solid #aaa;border-radius:6px;width:100%;box-sizing:border-box}
+pre{font-size:12px;white-space:pre-wrap;background:#fff;padding:12px;border-radius:8px;max-height:280px;overflow:auto}
+.status{font-weight:600;min-height:24px}
+</style>
+</head>
+<body>
+<h1>Voice agent console</h1>
+<p>Operator page. It needs the server's <code>OPERATOR_TOKEN</code>; the token stays in this tab's session storage.</p>
+<label for="token">Operator token</label>
+<input id="token" type="password" autocomplete="off">
+<p><button id="save-token">Use token</button><span id="ready" class="status"></span></p>
+
+<h2>Talk to the agent from this browser</h2>
+<p>Uses your microphone over WebRTC to this server, then the same agent session a phone call uses.</p>
+<button id="start" disabled>Start browser call</button><button id="stop" disabled>Hang up</button>
+<p id="call-status" class="status"></p>
+<audio id="audio" autoplay></audio>
+
+<h2>Outbound WhatsApp call</h2>
+<p>Only when the server has <code>ENABLE_OUTBOUND=1</code>. The person must have granted calling permission.</p>
+<label for="recipient">Number with country code, or business-scoped user ID</label>
+<input id="recipient" type="tel" autocomplete="off">
+<p><button id="permission" disabled>Check permission</button><button id="dial" disabled>Call this person</button><button id="outbound-stop" disabled>End call</button></p>
+<p id="outbound-status" class="status"></p>
+
+<h2>Events</h2>
+<pre id="events"></pre>
+<script src="/operator/app.js"></script>
+</body>
+</html>

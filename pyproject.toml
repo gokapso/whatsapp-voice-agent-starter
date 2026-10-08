@@ -1,0 +1,45 @@
+[project]
+name = "kapso-voice-agent-starter"
+version = "0.1.0"
+description = "Self-hosted English WhatsApp voice agent: Kapso Calling + Pipecat SmallWebRTC audio + ElevenLabs Agents conversation."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "pipecat-ai[webrtc]==1.12.0",
+  "fastapi==0.142.2",
+  "uvicorn==0.54.0",
+  "python-dotenv==1.2.4",
+  "httpx==0.28.1",
+  "websockets==17.1",
+  "pydantic==2.13.5",
+]
+
+[project.scripts]
+voice-agent = "kapso_voice_agent.cli:main"
+
+[dependency-groups]
+dev = ["pytest==9.1.1"]
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kapso_voice_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 145
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["kapso_voice_agent", "conftest", "test_call_flow"]
+force-sort-within-sections = true

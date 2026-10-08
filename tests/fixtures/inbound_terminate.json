@@ -1,0 +1,32 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "200000000000001",
+      "changes": [
+        {
+          "field": "calls",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550100000",
+              "phone_number_id": "100000000000001"
+            },
+            "calls": [
+              {
+                "id": "wacid.SYNTHETIC-INBOUND-1",
+                "event": "terminate",
+                "direction": "USER_INITIATED",
+                "timestamp": "1793000060",
+                "status": "COMPLETED",
+                "duration": 60,
+                "from": "15550100001",
+                "to": "15550100000"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
