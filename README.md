@@ -62,12 +62,11 @@ for this server:
 - **UDP to Meta** for the call audio, or a TURN server in `ICE_SERVERS_JSON`. An HTTPS tunnel
   alone does not carry audio. See [`docs/deploy.md`](docs/deploy.md#3-networking-signaling-vs-media).
 
-Add `KAPSO_API_KEY` and `WHATSAPP_PHONE_NUMBER_ID` to `.env`, restart the server, then register
-its webhook with Kapso:
+Add `KAPSO_API_KEY` and `WHATSAPP_PHONE_NUMBER_ID` to `.env` and restart the server with
+`uv run voice-agent serve`. In another terminal, register its webhook with Kapso:
 
 ```sh
 uv run voice-agent check
-uv run voice-agent serve
 uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp         # dry run
 uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp --yes
 ```
