@@ -12,7 +12,8 @@ The integration is one file, `src/kapso_voice_agent/calcom.py`, and uses the
 
 1. In Cal.com, create one event type per service callers can book (for example "Consultation",
    30 minutes). Its title, length and description are what Riley says. Its availability is what
-   Riley offers.
+   Riley offers. Do not use seated event types (several attendees in one booking): Riley refuses
+   them, because cancelling or moving one with your API key changes every attendee's seat.
 2. Create an API key under **Settings > Security** and put it in `.env` as `CAL_API_KEY`.
 3. Fill in `agent/business.json`:
 
@@ -49,8 +50,8 @@ The integration is one file, `src/kapso_voice_agent/calcom.py`, and uses the
    ```
 
    It prints your Cal.com username and time zone and every event type with its ID. It also lists
-   the problems it finds: a missing time zone, an event type ID that is not in your account, or a
-   time zone that is different from your Cal.com profile.
+   the problems it finds: a missing time zone, an event type ID that is not in your account, a
+   seated event type, or a time zone that is different from your Cal.com profile.
 
 5. Try the tools against your calendar. Reads are safe:
 
@@ -70,7 +71,7 @@ Restart `serve` after you change `.env` or `business.json`. The server reads the
 | --- | --- | --- |
 | `business_info` | `GET /v2/event-types/{id}` (cached 5 min) | Facts from `business.json`; service names and lengths from Cal.com |
 | `available_slots` | `GET /v2/slots` for one event type, 14 days from the asked day, in your time zone | At most two times per answer; `needs_email` tells Riley to ask for an email |
-| `book_appointment` | `POST /v2/bookings`, start in UTC | Attendee name, email (if asked) and your time zone. A note goes into the booking `metadata` |
+| `book_appointment` | `POST /v2/bookings`, start in UTC | Attendee name, email (if asked) and your time zone. A note goes into the booking `metadata`. A repeat request for the same service and time first reads `GET /v2/bookings/{uid}`: it is answered from that booking if it is still accepted or pending, and booked again if Cal.com cancelled, rejected or lost it |
 | `my_appointments` | `GET /v2/bookings/{uid}` for each of the caller's bookings | Bookings the business cancelled or moved in Cal.com are not listed |
 | `reschedule_appointment` | `POST /v2/bookings/{uid}/reschedule` | Cal.com makes a new booking uid; the caller keeps the same short id |
 | `cancel_appointment` | `POST /v2/bookings/{uid}/cancel` | |
@@ -95,8 +96,11 @@ Bookings made in Cal.com directly, or by other callers, are not visible on the p
   - No answer, a dropped connection or a 5xx: the result is `not_confirmed`. The booking may or
     may not exist, so Riley says it could not confirm the booking and does not try again. Check
     your Cal.com bookings list.
-- A booking that your event type must confirm first returns `status: pending`. Riley says that
-  the booking is requested, not confirmed.
+- A booking or a move that your event type must confirm first returns `status: pending`. Riley
+  says that the booking or the new time is requested, not confirmed.
+- A seated event type returns `unsupported_service` before any slot read or write. If Cal.com
+  still answers a booking with a `seatUid`, the booking is reported but not stored, so it can
+  never be moved or cancelled by phone.
 
 No SQLite transaction stays open during a Cal.com request. Each local write is one statement.
 

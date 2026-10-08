@@ -297,6 +297,8 @@ def cmd_calendar_check(args):
         fail(f"Cal.com could not be read ({error}); check CAL_API_KEY")
     problems = business.calcom_problems() + [f"cal_event_type_id {i} is not one of this account's event types"
                                              for i in account.pop("configured_not_found")]
+    problems += [f"cal_event_type_id {i} has seats; seated event types are not supported (callers could cancel "
+                 "other attendees' seats)" for i in account.pop("configured_seated")]
     if business.timezone_name and account["profile_timezone"] and business.timezone_name != account["profile_timezone"]:
         problems.append(f"business.json timezone {business.timezone_name} differs from the Cal.com profile's "
                         f"{account['profile_timezone']}; times are spoken in business.json's")

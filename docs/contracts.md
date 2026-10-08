@@ -50,15 +50,16 @@ offset) plus a `when` phrase for the agent to say. Examples from the Cal.com cal
 
 `available_slots` returns at most two slots; for a day with nothing open, `next_available` is
 the soonest open time after it (or null). `book_appointment` returns `status` `booked`,
-`pending` (the business confirms it in Cal.com) or `already_booked` (same caller, same time).
-`reschedule_appointment` returns `status: rescheduled` and `previous_when`; the booking keeps
-its `id`. `cancel_appointment` returns the cancelled booking. The local development calendar
+`pending` (requested; the business confirms it in Cal.com) or `already_booked` (same caller,
+service and time, still accepted in Cal.com; a repeat of a pending request stays `pending`).
+`reschedule_appointment` returns `status: rescheduled`, or `pending` when the new time still
+needs the business to confirm it, and `previous_when`; the booking keeps its `id`. `cancel_appointment` returns the cancelled booking. The local development calendar
 (`CALENDAR=local`) returns the same shapes, plus `open`/`closed_reason` for days it has no
 slots on.
 
 Codes: `invalid_arguments`, `unknown_tool`, `invalid_date`, `outside_horizon`,
 `service_required`, `unknown_service`, `confirmation_required`, `email_required`,
-`invalid_email`, `slot_unavailable`, `slot_taken`, `not_found`, `booking_rejected`,
+`invalid_email`, `slot_unavailable`, `slot_taken`, `not_found`, `booking_rejected`, `unsupported_service`,
 `not_confirmed`, `calendar_unavailable`, `internal_error`. Each message says how to recover,
 and the prompt has a rule for each code (`tests/test_tools.py` and `tests/test_calcom.py` check
 this). The provider receives `is_error = !ok`. Results are cached per `tool_call_id` (last 100)

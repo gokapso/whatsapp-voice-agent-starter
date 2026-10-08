@@ -71,9 +71,11 @@ TOOLS = {
     "my_appointments": (Arguments, "List the current caller's upcoming appointments, with booking ids and when "
                                    "phrases. Takes no arguments: the call itself identifies the caller."),
     "book_appointment": (BookArgs, "Book an appointment for the current caller. Call it only after the caller "
-                                   "clearly said yes to your read-back. Only ok=true means it is booked."),
+                                   "clearly said yes to your read-back. Only ok=true means it is booked; status pending "
+                                   "means requested, not confirmed yet."),
     "reschedule_appointment": (RescheduleArgs, "Move one of the current caller's appointments to a new open time. Call it "
-                                               "only after the caller clearly said yes. Only ok=true means it moved."),
+                                               "only after the caller clearly said yes. Only ok=true means it moved; status "
+                                               "pending means the new time is requested, not confirmed yet."),
     "cancel_appointment": (CancelArgs, "Cancel one of the current caller's appointments. Call it only after the "
                                        "caller clearly said yes. Only ok=true means it is cancelled."),
 }

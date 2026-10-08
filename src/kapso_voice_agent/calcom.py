@@ -13,6 +13,8 @@ Rules, following the Cal.com API reference (https://cal.com/docs/api-reference/v
 - Writes are sent once and never retried. A write that may have reached Cal.com without an answer
   (timeout, dropped connection, 5xx) becomes `not_confirmed`, never success.
 - No SQLite transaction is open during a network call. Each transaction is one statement.
+- Seated event types are not supported. Cal.com cancels or moves every seat of a seated booking
+  when the owner's key sends no `seatUid`, so such services are refused before any write.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -61,6 +63,11 @@ CREATE INDEX IF NOT EXISTS calcom_bookings_caller_start ON calcom_bookings(calle
 
 UNAVAILABLE = ("The calendar is not available right now, so nothing was looked up or changed. Say so briefly "
                "and offer to try once more. Never offer or confirm a time without a tool result.")
+NOT_BY_PHONE = ("This service can't be booked by phone, so nothing was looked up or booked. Say so and offer a "
+                "different service from business_info; do not try this one again.")
+NOT_CHANGED_BY_PHONE = ("This appointment can't be changed by phone, so nothing was changed. Say so and suggest "
+                        "the caller contact the business; do not try again.")
+REQUESTED = "Requested, not confirmed yet: the business confirms this kind of appointment itself. Say so."
 
 
 class CalendarUnavailable(Exception):
@@ -78,6 +85,14 @@ def parse_time(value):
     except ValueError:
         return None
     return moment if moment.tzinfo else None
+
+
+def seated(event_type):
+    """True for a Cal.com event type with seats (several attendees share one booking)."""
+    seats = event_type.get("seats")
+    if isinstance(seats, dict) and seats.get("seatsPerTimeSlot") and not seats.get("disabled"):
+        return True
+    return bool(event_type.get("seatsPerTimeSlot"))
 
 
 class CalComClient:
@@ -139,11 +154,13 @@ class CalComClient:
             raise CalendarUnavailable("unexpected /v2/me body")
         types = self.read("/v2/event-types", EVENT_TYPES_VERSION, params={"username": me["username"]}) or []
         event_types = [{"id": t.get("id"), "slug": t.get("slug"), "title": t.get("title"),
-                        "minutes": t.get("lengthInMinutes"), "hidden": t.get("hidden")}
+                        "minutes": t.get("lengthInMinutes"), "hidden": t.get("hidden"), "seated": seated(t)}
                        for t in types[:100] if isinstance(t, dict)]
         known = {t["id"] for t in event_types}
+        seated_ids = {t["id"] for t in event_types if t["seated"]}
         return {"username": me["username"], "profile_timezone": me.get("timeZone"), "event_types": event_types,
-                "configured_not_found": [i for i in configured if i not in known]}
+                "configured_not_found": [i for i in configured if i not in known],
+                "configured_seated": [i for i in configured if i in seated_ids]}
 
 
 def calendar_reads(method):
@@ -207,6 +224,12 @@ class CalComCalendar:
         with self.event_types_lock:
             self.event_types[event_type_id] = (clock_time.monotonic(), data)
         return data
+
+    def unsupported(self, service, message):
+        """Refuse a seated event type before any slot read or write. `calendar check` reports it too."""
+        if seated(self.event_type(service)):
+            return failure("unsupported_service", message)
+        return None
 
     def describe_service(self, service):
         event_type = self.event_type(service)
@@ -276,6 +299,8 @@ class CalComCalendar:
         if after and not after_time:
             return failure("invalid_arguments", "after must be an exact slot value from available_slots. Leave it empty "
                                                 "for the first times.")
+        if problem := self.unsupported(service, NOT_BY_PHONE):
+            return problem
         first, last = self.day_bounds(first_day, min(first_day + timedelta(days=SEARCH_DAYS - 1), self.last_day()))
         free = [s for s in self.open_times(service, first, last) if not after_time or datetime.fromisoformat(s) > after_time]
         wanted = [s for s in free if not day or s.startswith(day)]
@@ -342,10 +367,13 @@ class CalComCalendar:
             return failure("slot_unavailable", "Not booked. That is not an open appointment time. Call available_slots and "
                                                "use an exact slot value from its result.")
         start, service = self.local(moment), self.services[service_id]
+        if problem := self.unsupported(service, NOT_BY_PHONE):
+            return problem
         with self.connect() as db:
-            mine = db.execute("SELECT id FROM calcom_bookings WHERE caller = ? AND start = ? LIMIT 1", (caller, start)).fetchone()
-        if mine:
-            return {"ok": True, **self.describe(mine["id"], start, service_id, "already_booked")}
+            mine = db.execute("SELECT id, uid FROM calcom_bookings WHERE caller = ? AND start = ? AND service_id = ? "
+                              "ORDER BY id LIMIT 1", (caller, start, service_id)).fetchone()
+        if mine and (repeated := self.repeated(mine, start, service_id, moment)):
+            return repeated
         outcome, data = self.client.write("/v2/bookings", {
             "start": utc(moment), "eventTypeId": service["cal_event_type_id"],
             "attendee": {"name": name.strip(), "timeZone": str(self.timezone), "language": "en",
@@ -354,22 +382,49 @@ class CalComCalendar:
         if outcome == "ok":
             booking_id = secrets.token_hex(4).upper()
             confirmed_start = self.local(parse_time(data.get("start")) or moment)
-            try:
-                with self.connect() as db:
-                    db.execute("INSERT INTO calcom_bookings (id, uid, caller, start, service_id, created_at) "
-                               "VALUES (?, ?, ?, ?, ?, ?)",
-                               (booking_id, str(data["uid"]), caller, confirmed_start, service_id, self.now().isoformat()))
-            except sqlite3.Error:
-                # The booking exists in Cal.com, so it must be reported as made. Only managing it by
-                # phone later is lost.
+            if data.get("seatUid"):
+                # A seat in a shared booking (the event type became seated). The uid is the whole
+                # group's, so it is never stored: no later move or cancel can reach other attendees.
                 booking_id = None
+            else:
+                try:
+                    with self.connect() as db:
+                        db.execute("INSERT INTO calcom_bookings (id, uid, caller, start, service_id, created_at) "
+                                   "VALUES (?, ?, ?, ?, ?, ?)",
+                                   (booking_id, str(data["uid"]), caller, confirmed_start, service_id, self.now().isoformat()))
+                except sqlite3.Error:
+                    # The booking exists in Cal.com, so it must be reported as made. Only managing it by
+                    # phone later is lost.
+                    booking_id = None
             pending = data.get("status") == "pending"
             result = {"ok": True, **self.describe(booking_id, confirmed_start, service_id, "pending" if pending else "booked"),
                       "name": name.strip(), "timezone": str(self.timezone)}
             if pending:
-                result["message"] = "Requested, not confirmed yet: the business confirms this kind of appointment itself. Say so."
+                result["message"] = REQUESTED
             return result
         return self.write_failure(outcome, data, service, moment, "booked")
+
+    def repeated(self, row, start, service_id, moment):
+        """The caller asks again for a booking this server already made for them (same service and
+        time). Answer from Cal.com's current state, never from the local map alone: None means it is
+        not there anymore and a new booking may be made."""
+        booking = self.booking(row["uid"])
+        if booking is None or (isinstance(booking, dict) and booking.get("status") in ("cancelled", "rejected")):
+            self.forget(row)
+            return None
+        if not isinstance(booking, dict) or booking.get("status") not in ("accepted", "pending"):
+            raise CalendarUnavailable("unexpected booking body")
+        if (now_at := parse_time(booking.get("start"))) and now_at != moment:
+            return None  # moved in Cal.com: the caller has nothing at this time
+        if booking["status"] == "pending":
+            return {"ok": True, **self.describe(row["id"], start, service_id, "pending"),
+                    "message": "Already requested in this calendar, not confirmed yet: the business confirms it "
+                               "itself. Nothing new was booked. Say so."}
+        return {"ok": True, **self.describe(row["id"], start, service_id, "already_booked")}
+
+    def booking(self, uid):
+        """The booking as Cal.com has it now, or None when Cal.com does not have it."""
+        return self.client.read(f"/v2/bookings/{quote(uid, safe='')}", BOOKINGS_VERSION)
 
     def write_failure(self, outcome, status, service, moment, verb):
         if outcome == "not_sent" or status in (401, 403):
@@ -393,8 +448,7 @@ class CalComCalendar:
             return {"ok": True, "appointments": []}
         # The current state comes from Cal.com: a booking the business cancelled or moved is not listed.
         with ThreadPoolExecutor(max_workers=len(rows)) as pool:
-            bookings = list(pool.map(lambda row: self.client.read(f"/v2/bookings/{quote(row['uid'], safe='')}",
-                                                                  BOOKINGS_VERSION), rows))
+            bookings = list(pool.map(lambda row: self.booking(row["uid"]), rows))
         appointments = []
         for row, booking in zip(rows, bookings, strict=True):
             if not isinstance(booking, dict) or booking.get("status") not in ("accepted", "pending"):
@@ -419,6 +473,9 @@ class CalComCalendar:
                                                "use an exact slot value from its result.")
         if self.local(moment) == row["start"]:
             return {"ok": True, **self.describe(row["id"], row["start"], row["service_id"], "unchanged")}
+        service = self.services.get(row["service_id"])
+        if service and (problem := self.unsupported(service, NOT_CHANGED_BY_PHONE)):
+            return problem
         outcome, data = self.client.write(f"/v2/bookings/{quote(row['uid'], safe='')}/reschedule",
                                           {"start": utc(moment), "reschedulingReason": "Moved by the caller on a phone call."})
         if outcome == "refused" and data == 404:
@@ -426,17 +483,26 @@ class CalComCalendar:
             return failure("not_found", "Nothing moved: that appointment is no longer in the calendar. "
                                         "Call my_appointments to see what is booked.")
         if outcome != "ok":
-            return self.write_failure(outcome, data, self.services.get(row["service_id"]), moment, "moved")
+            return self.write_failure(outcome, data, service, moment, "moved")
         start = self.local(parse_time(data.get("start")) or moment)
         try:
-            with self.connect() as db:
-                # Cal.com gives the moved booking a new uid; the caller keeps the same short id.
-                db.execute("UPDATE calcom_bookings SET uid = ?, start = ? WHERE id = ? AND caller = ?",
-                           (str(data["uid"]), start, row["id"], caller))
+            if data.get("seatUid"):
+                self.forget(row)  # now a seat in a shared booking: never managed by phone again
+            else:
+                with self.connect() as db:
+                    # Cal.com gives the moved booking a new uid; the caller keeps the same short id.
+                    db.execute("UPDATE calcom_bookings SET uid = ?, start = ? WHERE id = ? AND caller = ?",
+                               (str(data["uid"]), start, row["id"], caller))
         except sqlite3.Error:
             pass  # moved in Cal.com, which is what the caller asked for; only later phone changes are lost
-        return {"ok": True, **self.describe(row["id"], start, row["service_id"], "rescheduled"),
-                "previous_when": spoken(row["start"])}
+        # A booking the business must confirm stays pending after a move (Cal.com reschedule docs).
+        pending = data.get("status") == "pending"
+        result = {"ok": True, **self.describe(row["id"], start, row["service_id"], "pending" if pending else "rescheduled"),
+                  "previous_when": spoken(row["start"])}
+        if pending:
+            result["message"] = ("Moved, but the new time is requested, not confirmed yet: the business confirms it "
+                                 "itself. Say so.")
+        return result
 
     @calendar_reads
     def cancel(self, caller, booking_id, confirmed):
@@ -448,6 +514,9 @@ class CalComCalendar:
             # Same answer whether the ID is unknown or belongs to someone else.
             return failure("not_found", "Nothing cancelled. No appointment with that id for this caller. "
                                         "Call my_appointments and use an id from it.")
+        service = self.services.get(row["service_id"])
+        if service and (problem := self.unsupported(service, NOT_CHANGED_BY_PHONE)):
+            return problem  # without a seatUid this cancel would remove every attendee
         outcome, data = self.client.write(f"/v2/bookings/{quote(row['uid'], safe='')}/cancel",
                                           {"cancellationReason": "Cancelled by the caller on a phone call."})
         if outcome == "refused" and data == 404:

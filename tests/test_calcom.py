@@ -281,9 +281,58 @@ class TestBooking:
         runner = ToolRunner(calendar, "a")
         first = runner.execute(tool_call("book_appointment", booking(), "same-id"))
         assert runner.execute(tool_call("book_appointment", booking(), "same-id")) == first
+        [uid] = cal.bookings
+        cal.requests.clear()
+        read = cal.overrides[("GET", "/v2/bookings")] = lambda r: (no_write_lock(calendar), ok(cal.bookings[uid]))[1]
         again, error = run(runner, "book_appointment", booking())
-        assert not error and again["status"] == "already_booked" and again["id"] == json.loads(first["result"])["id"]
-        assert len(cal.calls("POST")) == 1
+        assert read and not error and again["status"] == "already_booked" and again["service_id"] == "consultation"
+        assert again["id"] == json.loads(first["result"])["id"]
+        # Answered from Cal.com's current state (outside any SQLite transaction), not from the local map alone.
+        assert cal.calls() == [("GET", f"/v2/bookings/{uid}")]
+
+    def test_a_repeat_of_a_request_the_business_has_not_confirmed_stays_requested(self, calendar, cal):
+        cal.booking_status = "pending"
+        runner = ToolRunner(calendar, "a")
+        first, _ = run(runner, "book_appointment", booking())
+        again, error = run(runner, "book_appointment", booking())
+        assert not error and again["status"] == "pending" and again["id"] == first["id"]
+        assert "not confirmed" in again["message"] and len(cal.calls("POST")) == 1
+
+    @pytest.mark.parametrize("gone", ["cancelled", "rejected", "missing"])
+    def test_a_repeat_after_cal_com_dropped_the_booking_books_again(self, calendar, cal, gone):
+        runner = ToolRunner(calendar, "a")
+        first, _ = run(runner, "book_appointment", booking())
+        [uid] = cal.bookings
+        if gone == "missing":
+            del cal.bookings[uid]
+        else:
+            cal.bookings[uid]["status"] = gone
+        cal.free[1001].append(TUESDAY_10)
+        again, error = run(runner, "book_appointment", booking())
+        assert not error and again["status"] == "booked" and again["id"] != first["id"]
+        assert len(cal.calls("POST")) == 2 and calendar.own("a", first["id"]) is None
+
+    def test_a_repeat_whose_booking_cannot_be_read_is_not_confirmed_or_sent_again(self, calendar, cal):
+        runner = ToolRunner(calendar, "a")
+        run(runner, "book_appointment", booking())
+        cal.overrides[("GET", "/v2/bookings")] = lambda r: httpx.Response(503)
+        again, error = run(runner, "book_appointment", booking())
+        assert error and again["code"] == "calendar_unavailable" and len(cal.calls("POST")) == 1
+
+    def test_another_service_at_the_same_time_is_never_reported_as_booked_from_the_first(self, calendar, cal):
+        runner = ToolRunner(calendar, "a")
+        first, _ = run(runner, "book_appointment", booking())
+        cal.free[1001].append(TUESDAY_10)  # the other event type is free then
+        cal.free[1002].append(TUESDAY_10)
+        other, error = run(runner, "book_appointment", booking(service_id="follow_up"))
+        assert not error and other["status"] == "booked" and other["id"] != first["id"]
+        assert [r[3]["eventTypeId"] for r in cal.requests if r[:2] == ("POST", "/v2/bookings")] == [1001, 1002]
+
+    def test_another_service_cal_com_refuses_at_that_time_is_not_booked(self, calendar, cal):
+        runner = ToolRunner(calendar, "a")
+        run(runner, "book_appointment", booking())
+        other, error = run(runner, "book_appointment", booking(service_id="follow_up"))
+        assert error and other["code"] == "slot_taken" and "id" not in other
 
     def test_a_booking_that_needs_the_business_to_confirm_is_called_requested(self, calendar, cal):
         cal.booking_status = "pending"
@@ -377,6 +426,16 @@ class TestOwnAppointments:
         data, error = run(runner, "reschedule_appointment", {"booking_id": booked["id"], "slot": TUESDAY_10, "confirmed": True})
         assert not error and data["status"] == "unchanged" and len(cal.calls("POST")) == 1
 
+    def test_a_move_the_business_must_confirm_is_called_requested(self, calendar, cal):
+        cal.booking_status = "pending"
+        runner = ToolRunner(calendar, "a")
+        booked, _ = run(runner, "book_appointment", booking())
+        data, error = run(runner, "reschedule_appointment", {"booking_id": booked["id"], "slot": "2026-11-04T10:00:00-06:00",
+                                                             "confirmed": True})
+        assert not error and data["status"] == "pending" and "not confirmed" in data["message"]
+        assert data["id"] == booked["id"] and data["previous_when"] == "Tuesday, November 3 at 10 AM"
+        assert run(runner, "my_appointments")[0]["appointments"][0]["status"] == "pending"
+
     def test_reschedule_to_a_taken_time_keeps_the_old_one(self, calendar, cal):
         runner = ToolRunner(calendar, "a")
         booked, _ = run(runner, "book_appointment", booking())
@@ -385,6 +444,65 @@ class TestOwnAppointments:
                                                              "confirmed": True})
         assert error and data["code"] == "slot_taken"
         assert [a["slot"] for a in run(runner, "my_appointments")[0]["appointments"]] == [TUESDAY_10]
+
+
+def no_write_lock(calendar):
+    """Fails at once if another connection holds a SQLite write lock."""
+    db = sqlite3.connect(calendar.path, timeout=0)
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def seated_type(event_type_id):
+    """How Cal.com describes an event type with seats (EventTypeOutput_2026_06_12)."""
+    return lambda r: ok({**EVENT_TYPES[event_type_id], "seatsPerTimeSlot": 4,
+                         "seats": {"seatsPerTimeSlot": 4, "showAttendeeInfo": False, "showAvailabilityCount": True}})
+
+
+class TestSeatedEventTypes:
+    """Cal.com cancels or moves every seat of a seated booking when the owner's key sends no seatUid,
+    so the agent never books, moves or cancels on a seated event type."""
+
+    def test_a_seated_service_is_refused_before_any_slot_read_or_booking(self, calendar, cal):
+        cal.overrides[("GET", "/v2/event-types/1001")] = seated_type(1001)
+        runner = ToolRunner(calendar, "a")
+        slots, slots_error = run(runner, "available_slots", {"service_id": "consultation"})
+        booked, book_error = run(runner, "book_appointment", booking())
+        assert slots_error and book_error and slots["code"] == booked["code"] == "unsupported_service"
+        assert cal.calls() == [("GET", "/v2/event-types/1001")]  # cached; no slots, no POST
+
+    def test_disabled_seats_are_an_ordinary_event_type(self, calendar, cal):
+        cal.overrides[("GET", "/v2/event-types/1001")] = lambda r: ok({**EVENT_TYPES[1001], "seatsPerTimeSlot": None,
+                                                                        "seats": {"seatsPerTimeSlot": 4, "disabled": True}})
+        data, error = run(ToolRunner(calendar, "a"), "book_appointment", booking())
+        assert not error and data["status"] == "booked"
+
+    def test_a_booking_whose_type_became_seated_is_never_moved_or_cancelled_for_everyone(self, calendar, cal):
+        runner = ToolRunner(calendar, "a")
+        booked, _ = run(runner, "book_appointment", booking())
+        calendar.event_types.clear()
+        cal.overrides[("GET", "/v2/event-types/1001")] = seated_type(1001)
+        moved, moved_error = run(runner, "reschedule_appointment", {"booking_id": booked["id"],
+                                                                    "slot": "2026-11-04T10:00:00-06:00", "confirmed": True})
+        cancelled, cancel_error = run(runner, "cancel_appointment", {"booking_id": booked["id"], "confirmed": True})
+        assert moved_error and cancel_error and moved["code"] == cancelled["code"] == "unsupported_service"
+        assert cal.calls("POST") == [("POST", "/v2/bookings")]
+
+    def test_a_seat_in_a_shared_booking_is_reported_but_never_managed_by_phone(self, calendar, cal):
+        # Documented seated create answer: uid is the whole group's booking, seatUid the caller's seat.
+        cal.overrides[("POST", "/v2/bookings")] = lambda r: httpx.Response(201, json={"status": "success", "data": {
+            "uid": "shared-group-booking", "seatUid": "caller-a-seat", "status": "accepted",
+            "start": "2026-11-03T16:00:00.000Z", "attendees": []}})
+        runner = ToolRunner(calendar, "a")
+        data, error = run(runner, "book_appointment", booking())
+        assert not error and data["status"] == "booked" and data["id"] is None
+        with calendar.connect() as db:
+            assert db.execute("SELECT COUNT(*) FROM calcom_bookings").fetchone()[0] == 0
+        assert run(runner, "my_appointments")[0]["appointments"] == []
+        assert not [r for r in cal.requests if "shared-group-booking" in r[1]]
 
 
 class TestBoundedOwnList:
@@ -401,7 +519,11 @@ class TestBoundedOwnList:
             plan = " ".join(r[3] for r in db.execute(
                 "EXPLAIN QUERY PLAN SELECT id, uid, start, service_id FROM calcom_bookings "
                 "WHERE caller = ? AND start >= ? ORDER BY start, id LIMIT 5", ("a", "2026")))
+            repeat = " ".join(r[3] for r in db.execute(
+                "EXPLAIN QUERY PLAN SELECT id, uid FROM calcom_bookings WHERE caller = ? AND start = ? AND service_id = ? "
+                "ORDER BY id LIMIT 1", ("a", "2026", "consultation")))
         assert "calcom_bookings_caller_start" in plan and "TEMP B-TREE" not in plan
+        assert "calcom_bookings_caller_start" in repeat and "TEMP B-TREE" not in repeat
 
 
 def test_an_unfinished_business_file_is_refused(tmp_path, spec):
@@ -422,8 +544,10 @@ def test_every_cal_com_failure_code_has_a_recovery_rule_in_the_prompt(calendar, 
     codes.add(run(runner, "book_appointment", booking(slot="2026-11-03T11:00:00-06:00"))[0]["code"])
     cal.overrides[("GET", "/v2/slots")] = lambda r: httpx.Response(500)
     codes.add(run(runner, "available_slots", {"service_id": "consultation"})[0]["code"])
+    cal.overrides[("GET", "/v2/event-types/1002")] = seated_type(1002)
+    codes.add(run(runner, "available_slots", {"service_id": "follow_up"})[0]["code"])
     assert codes == {"service_required", "email_required", "invalid_email", "not_found", "slot_taken", "booking_rejected",
-                     "not_confirmed", "calendar_unavailable"}
+                     "not_confirmed", "calendar_unavailable", "unsupported_service"}
     recovery = spec.prompt.split("## When a tool says no", 1)[1].split("##", 1)[0]
     assert [code for code in sorted(codes) if code not in recovery] == []
 
@@ -451,6 +575,16 @@ class TestCli:
         with pytest.raises(SystemExit):
             cli.main(["--env-file", env, "calendar", "check"])
         assert "cal_event_type_id 1002" in capsys.readouterr().out
+
+    def test_calendar_check_names_seated_event_types(self, env, cal, capsys):
+        cal.overrides[("GET", "/v2/event-types")] = lambda r: ok([EVENT_TYPES[1001], {**EVENT_TYPES[1002], "seatsPerTimeSlot": 3}])
+        with pytest.raises(SystemExit):
+            cli.main(["--env-file", env, "calendar", "check"])
+        report = json.loads(capsys.readouterr().out)
+        assert [p for p in report["problems"] if "seats" in p] == [
+            "cal_event_type_id 1002 has seats; seated event types are not supported (callers could cancel other "
+            "attendees' seats)"]
+        assert [t["seated"] for t in report["event_types"]] == [False, True]
 
     def test_tools_call_reads_real_times_but_writes_only_with_yes(self, env, cal, capsys):
         cli.main(["--env-file", env, "tools", "call", "available_slots", '{"service_id": "consultation"}'])
