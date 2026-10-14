@@ -19,6 +19,10 @@ def call_ref(call_id):
 # Why the voice provider last refused a session, for the operator console. A short code only;
 # never the provider's message, which can echo request details.
 PROVIDER_PROBLEMS = ("auth", "rate_limited", "not_found", "unreachable", "failed")
+# Events that mean a call did not go as planned. A failed tool result (for example slot_taken) is
+# a normal answer, not a problem with the call.
+CALL_PROBLEM = re.compile(r"^(provider_problem_|agent_session_not_ready|agent_(start|receive|audio_send)_failed_|call_failed_"
+                          r"|answer_timed_out|outbound_failed_|outbound_connect_outcome_unknown|reject_|inbound_rejected_busy)")
 
 
 class EventLog:
@@ -46,3 +50,28 @@ class EventLog:
             if isinstance(value, (int, float, bool)) or (isinstance(value, str) and len(value) <= 64):
                 entry[key] = value
         self.events.append(entry)
+
+    def recent_calls(self, active=(), limit=6):
+        """The calls this log still holds (its last 200 events), newest first. Built from event
+        names only: no call history is stored anywhere."""
+        calls = {}
+        for entry in self.events:
+            ref, name = entry.get("ref"), entry["event"]
+            if not ref or name == "native_artifact_event":
+                continue
+            call = calls.setdefault(ref, {"ref": ref, "kind": "browser" if ref.startswith("browser-") else "whatsapp_inbound",
+                                          "started_at": entry["at"], "connected_at": None, "last_at": entry["at"],
+                                          "media": None, "tools": 0, "problem": False})
+            call["last_at"] = entry["at"]
+            if name.startswith("outbound_"):
+                call["kind"] = "whatsapp_outbound"
+            if name == "rtc_connected" and not call["connected_at"]:
+                call["connected_at"], call["media"] = entry["at"], entry.get("media")
+            elif name.startswith("tool_") and name != "tool_end_call_ok":
+                call["tools"] += 1
+            elif CALL_PROBLEM.match(name):
+                call["problem"] = True
+        newest = list(calls.values())[::-1][:limit]  # the log is in time order, so first seen = started first
+        for call in newest:
+            call["active"] = call["ref"] in active
+        return newest

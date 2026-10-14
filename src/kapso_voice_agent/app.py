@@ -193,20 +193,37 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     def voice_status():
         """Which provider a browser call would talk to. Names only; never a key."""
         grok = settings.voice_provider == "grok"
+        setup_step = None  # what the console asks for next: "api_key", then "create_agent" (ElevenLabs)
+        if not settings.dev_agent_ws_url:
+            if not (settings.xai_api_key if grok else settings.elevenlabs_api_key):
+                setup_step = "api_key"
+            elif not grok and not settings.elevenlabs_agent_id:
+                setup_step = "create_agent"
         return {"provider": settings.voice_provider, "label": "Grok Voice" if grok else "ElevenLabs Agents",
                 "model": spec.grok["model"] if grok else None, "voice": spec.grok["voice"] if grok else None,
-                "offline_fake_agent": bool(settings.dev_agent_ws_url), "problem": log.provider_problem}
+                "offline_fake_agent": bool(settings.dev_agent_ws_url), "setup_step": setup_step,
+                "problem": log.provider_problem}
+
+    def call_audio():
+        if settings.turn_provider == "cloudflare":
+            return "cloudflare_turn"
+        return "ice_servers" if json.loads(settings.ice_servers_json) else "direct"
 
     @api.get("/state")
     async def state():
+        calls = manager.snapshot()
+        whatsapp_missing = [name for name, value in (("KAPSO_API_KEY", settings.kapso_api_key),
+                                                     ("WHATSAPP_PHONE_NUMBER_ID", settings.phone_number_id),
+                                                     ("WHATSAPP_WEBHOOK_SECRET", settings.webhook_secret)) if not value]
         return {"calls_ready": settings.calls_ready, "agent_ready": settings.agent_ready,
                 "agent_missing": settings.agent_missing(),  # setting names only, never values
                 "voice": voice_status(), "calendar": settings.calendar or None,
+                "whatsapp_missing": whatsapp_missing, "call_audio": call_audio(),
                 "outbound_enabled": settings.enable_outbound, "local_capture": settings.local_capture,
                 "recording": manager.recording.status(),
                 "max_concurrent_calls": settings.max_concurrent_calls, "busy": manager.busy(),
-                "calls": manager.snapshot(), "events": list(log.events),
-                "native_artifact_events": list(manager.artifacts)}
+                "calls": calls, "recent_calls": log.recent_calls({call["ref"] for call in calls}),
+                "events": list(log.events), "native_artifact_events": list(manager.artifacts)}
 
     @api.post("/browser-call")
     async def browser_call(offer: Offer):

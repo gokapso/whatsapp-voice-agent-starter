@@ -218,6 +218,30 @@ class TestOperatorSurface:
         assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
         assert page.headers["cache-control"] == "no-store"
 
+    def test_state_summarizes_recent_calls_from_the_event_log_without_identifiers(self, settings, spec, store):
+        async def go():
+            app = make_app(replace(settings, kapso_api_key="", elevenlabs_agent_id=""), spec, store)
+            log = app.state.log
+            for event, ref, fields in [("accept_ok", "call-0123456789abcdef", {}),
+                                       ("rtc_connected", "call-0123456789abcdef", {"media": "relay"}),
+                                       ("tool_available_slots_failed", "call-0123456789abcdef", {}),
+                                       ("tool_end_call_ok", "call-0123456789abcdef", {}),
+                                       ("session_closed", "call-0123456789abcdef", {}),
+                                       ("outbound_ringing", "call-fedcba9876543210", {}),
+                                       ("outbound_failed_TimeoutError", "call-fedcba9876543210", {}),
+                                       ("provider_problem_auth", "browser-00112233aabbccdd", {})]:
+                log.add(event, ref, **fields)
+            async with asgi_client(app) as client:
+                return (await client.get("/operator/api/state", headers=AUTH)).json()
+        state = run(go())
+        browser, outbound, inbound = state["recent_calls"]
+        assert (browser["kind"], browser["problem"], browser["connected_at"]) == ("browser", True, None)
+        assert (outbound["kind"], outbound["problem"]) == ("whatsapp_outbound", True)
+        assert (inbound["kind"], inbound["media"], inbound["tools"], inbound["problem"], inbound["active"]) == (
+            "whatsapp_inbound", "relay", 1, False, False)
+        assert state["voice"]["setup_step"] == "create_agent" and state["whatsapp_missing"] == ["KAPSO_API_KEY"]
+        assert state["call_audio"] == "direct"
+
     def test_outbound_is_off_unless_enabled_and_never_dials(self, settings, spec, store):
         async def go():
             kapso = KapsoRecorder()
