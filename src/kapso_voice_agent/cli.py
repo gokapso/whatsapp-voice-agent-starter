@@ -454,9 +454,10 @@ def cmd_init(args):
     command = "voice-agent" + (f" --env-file {shown_path(path)}" if args.env_file else "")
     print(f"Console access key: run `{command} console-key` to copy it. It opens the operator console; "
           "it is not a provider API key.")
-    print("Next: put your ElevenLabs and Cal.com API keys in ELEVENLABS_API_KEY and CAL_API_KEY, fill in "
-          "agent/business.json, run `uv run voice-agent calendar check`, then "
-          "`uv run voice-agent agent apply --yes --save-agent-id`.")
+    print("Next: run `uv run voice-agent setup` to choose a voice provider and calendar. Or edit the file: "
+          "for ElevenLabs set ELEVENLABS_API_KEY (for Grok Voice, VOICE_PROVIDER=grok and XAI_API_KEY), set "
+          "CAL_API_KEY and fill in agent/business.json, run `uv run voice-agent calendar check`, then with "
+          "ElevenLabs `uv run voice-agent agent apply --yes --save-agent-id`.")
 
 
 def cmd_setup(args):

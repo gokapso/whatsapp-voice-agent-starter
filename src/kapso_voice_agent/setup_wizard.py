@@ -187,15 +187,16 @@ def run(path, command, provider=None, calendar=None, host=None, whatsapp=None, p
         created = True
         prompter.out(f"Created {path} (0600) with a new console access key and local secrets.")
     current = read_env(path)
+    current_provider = current.get("VOICE_PROVIDER") or "elevenlabs"
+    current_calendar = current.get("CALENDAR") or ("calcom" if current.get("CAL_API_KEY") else "local")
     if interactive:
-        provider = provider or choose(prompter, "Which voice provider runs the conversation?", PROVIDERS,
-                                      current.get("VOICE_PROVIDER") or "elevenlabs")
-        calendar = calendar or choose(prompter, "Which calendar should bookings go to?", CALENDARS,
-                                      current.get("CALENDAR") or ("calcom" if current.get("CAL_API_KEY") else "local"))
+        provider = provider or choose(prompter, "Which voice provider runs the conversation?", PROVIDERS, current_provider)
+        calendar = calendar or choose(prompter, "Which calendar should bookings go to?", CALENDARS, current_calendar)
         host = host or choose(prompter, "Where will the server run?", HOSTS, "local", marker="start here")
         if whatsapp is None and host != "local":
             whatsapp = prompter.ask("Connect a WhatsApp number through Kapso now? [y/N]: ").strip().lower() in ("y", "yes")
-    provider, calendar, host = provider or "elevenlabs", calendar or "local", host or "local"
+    # Without a flag, keep what the file already says.
+    provider, calendar, host = provider or current_provider, calendar or current_calendar, host or "local"
     updates = {"VOICE_PROVIDER": provider}
     entered = []
     for key in needed_keys(provider, calendar, host, bool(whatsapp)):

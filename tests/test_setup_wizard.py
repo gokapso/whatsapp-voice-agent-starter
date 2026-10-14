@@ -142,3 +142,13 @@ def test_railway_variables_is_a_dry_run_and_then_sends_values_only_through_stdin
     assert not any(XAI_KEY in part for command, _ in calls for part in command)
     assert (["railway", "variable", "set", "XAI_API_KEY", "--stdin", "--skip-deploys"], XAI_KEY.encode()) in calls
     assert XAI_KEY not in "\n".join(printed)
+
+
+def test_no_input_without_flags_keeps_the_files_choices(tmp_path):
+    path = tmp_path / ".env"
+    cli.main(["--env-file", str(path), "init"])
+    update_env(path, {"VOICE_PROVIDER": "grok", "CAL_API_KEY": "cal_live_not_real", "CALENDAR": "calcom"})
+    quiet = Prompter(ask=lambda p: pytest.fail("asked"), secret=lambda p: pytest.fail("asked"), out=lambda *a, **k: None)
+    run(path, "voice-agent", prompter=quiet, interactive=False)
+    settings = load_settings(env_file=path)
+    assert settings.voice_provider == "grok" and settings.calendar == "calcom"
