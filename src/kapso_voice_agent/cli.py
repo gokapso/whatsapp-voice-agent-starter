@@ -345,14 +345,14 @@ def voice_label(settings, spec):
     return "ElevenLabs Agents"
 
 
-def serve_banner(settings, host, port, env_label, spec=None):
+def serve_banner(settings, host, port, env_label, spec=None, key_command="voice-agent console-key"):
     """What `serve` prints at startup: where to go and what is missing. Never a secret value."""
     local = {"0.0.0.0": "127.0.0.1", "": "127.0.0.1", "::": "[::1]"}.get(host, f"[{host}]" if ":" in host else host)
     base = f"http://{local}:{port}"
     lines = [f"Voice agent server on {base} (env: {env_label})"]
     if settings.operator_enabled:
         lines.append(f"Operator console: {base}/operator/  (sign in with the console access key: "
-                     "`voice-agent console-key` copies it)")
+                     f"`{key_command}` copies it)")
     else:
         lines.append("Operator console: off (set OPERATOR_TOKEN, or run `voice-agent init`)")
     if settings.dev_agent_ws_url:
@@ -388,7 +388,8 @@ def cmd_serve(args):
         fail(str(error))
     path = env_path(args)
     label = shown_path(path) if path.is_file() else "process environment only"
-    print("\n".join(serve_banner(settings, args.host, args.port, label, spec)), flush=True)
+    key_command = "voice-agent" + (f" --env-file {shown_path(path)}" if args.env_file else "") + " console-key"
+    print("\n".join(serve_banner(settings, args.host, args.port, label, spec, key_command)), flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning", proxy_headers=False)
 
 
