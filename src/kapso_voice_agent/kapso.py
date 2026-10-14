@@ -52,11 +52,6 @@ class KapsoClient:
             raise KapsoError("Kapso returned an unexpected call list")
         return rows[0] if rows and isinstance(rows[0], dict) else None
 
-    async def calling_settings(self):
-        """The number's calling settings, read-only. Never asks for SIP credentials."""
-        result = await self.request("GET", self.calls_path("settings"))
-        return result.get("calling") if isinstance(result.get("calling"), dict) else {}
-
     async def permissions(self, recipient):
         key = "recipient" if recipient.startswith("US.") else "user_wa_id"
         return await self.request("GET", self.calls_path("call_permissions") + "?" + urlencode({key: recipient}))

@@ -46,7 +46,7 @@ PLAIN = {"WHATSAPP_PHONE_NUMBER_ID": "Meta phone number ID (numeric, not the dis
 VALUE = re.compile(r"^[A-Za-z0-9._~+/=:@-]{1,512}$")
 CLIPBOARDS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["clip.exe"])
 # What a hosted server reads. DATA_DIR comes from the image; DEV_AGENT_WS_URL is loopback-only.
-SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "XAI_SIP_WEBHOOK_SECRET", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
+SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
                "OPERATOR_TOKEN", "CALLER_KEY_SECRET", "KAPSO_API_KEY", "WHATSAPP_PHONE_NUMBER_ID",
                "WHATSAPP_WEBHOOK_SECRET", "META_GRAPH_VERSION", "ICE_SERVERS_JSON", "TURN_PROVIDER",
                "CLOUDFLARE_TURN_KEY_ID", "CLOUDFLARE_TURN_API_TOKEN", "TURN_TRANSPORT", "ENABLE_OUTBOUND",
@@ -247,8 +247,7 @@ def server_variables(path, target):
     notes = []
     if target == "pipecat-cloud":
         # No webhook and no console in a Cloud session; Kapso's API vouches for each call (cloud.py).
-        keys = tuple(k for k in SERVER_KEYS if k not in ("OPERATOR_TOKEN", "WHATSAPP_WEBHOOK_SECRET", "ENABLE_OUTBOUND",
-                                                         "XAI_SIP_WEBHOOK_SECRET"))
+        keys = tuple(k for k in SERVER_KEYS if k not in ("OPERATOR_TOKEN", "WHATSAPP_WEBHOOK_SECRET", "ENABLE_OUTBOUND"))
         if not values.get("CALLER_KEY_SECRET"):
             raise SetupError("Set CALLER_KEY_SECRET in the env file first. Use the same value everywhere this number's "
                              "calls are answered, or callers lose their bookings")
