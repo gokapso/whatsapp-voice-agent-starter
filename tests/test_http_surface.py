@@ -184,7 +184,8 @@ class TestOperatorSurface:
                 return (await client.get("/healthz")).json()
         assert run(go()) == {"ok": True}
 
-    @pytest.mark.parametrize("path,method", [("/operator/", "GET"), ("/operator/api/state", "GET"),
+    @pytest.mark.parametrize("path,method", [("/operator/", "GET"), ("/operator/console.css", "GET"),
+                                             ("/operator/api/state", "GET"),
                                              ("/operator/api/browser-call", "POST")])
     def test_operator_routes_do_not_exist_without_token(self, settings, spec, store, path, method):
         async def go():
@@ -206,10 +207,14 @@ class TestOperatorSurface:
     def test_console_page_has_no_secrets_and_strict_headers(self, settings, spec, store):
         async def go():
             async with asgi_client(make_app(settings, spec, store)) as client:
-                return await client.get("/operator/"), await client.get("/operator/app.js")
-        page, script = run(go())
-        assert page.status_code == script.status_code == 200
-        assert TOKEN not in page.text + script.text
+                return await client.get("/operator/"), await client.get("/operator/app.js"), await client.get("/operator/console.css")
+        page, script, styles = run(go())
+        assert page.status_code == script.status_code == styles.status_code == 200
+        assert TOKEN not in page.text + script.text + styles.text
+        assert '<link rel="stylesheet" href="/operator/console.css">' in page.text
+        assert "<style>" not in page.text
+        assert styles.headers["content-type"].startswith("text/css")
+        assert styles.headers["content-security-policy"] == page.headers["content-security-policy"]
         assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
         assert page.headers["cache-control"] == "no-store"
 

@@ -177,6 +177,10 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     async def console_script():
         return FileResponse(STATIC / "app.js", media_type="text/javascript", headers=PAGE_HEADERS)
 
+    @page.get("/console.css")
+    async def console_styles():
+        return FileResponse(STATIC / "console.css", media_type="text/css", headers=PAGE_HEADERS)
+
     api = APIRouter(prefix="/operator/api", dependencies=[Depends(operator)])
 
     @api.get("/state")
