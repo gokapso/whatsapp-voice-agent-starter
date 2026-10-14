@@ -4,6 +4,11 @@ Pipeline: transport.input() -> ElevenAgentBridge -> transport.output() [-> local
 The bridge forwards 16 kHz PCM caller audio to the agent WebSocket, plays the agent's PCM back,
 honours interruptions, answers pings and runs client tools locally. There is no second LLM, ASR
 or TTS here. With VOICE_PROVIDER=grok, grok_bridge.GrokAgentBridge takes the bridge's place.
+
+The agent speaks its greeting as soon as the conversation opens. So the bridge gets the signed URL
+when the pipeline starts, but opens the conversation only once the call's WebRTC media is
+connected (`media_ready`); otherwise the start of the AI disclosure could play into a call whose
+audio is not flowing yet.
 """
 
 import asyncio
@@ -112,22 +117,20 @@ class ElevenAgentBridge(FrameProcessor):
         self.stopping = False
         self.audio_in = self.audio_out = 0
         self.conversation_id = None
+        self.url = None                  # signed URL, fetched when the pipeline starts
+        self.media_connected = False     # set by the session when WebRTC connects
+        self.opening = False
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
         if isinstance(frame, StartFrame):
             await self.push_frame(frame, direction)
             try:
-                url = await self.url_factory(self.context["settings"])
-                self.websocket = await connect(url, open_timeout=15, max_size=2_000_000)
-                await self.websocket.send(json.dumps({"type": "conversation_initiation_client_data",
-                                                      "dynamic_variables": self.context["dynamic_variables"]}))
-                self.receive_task = self.create_task(self.receive(), name="eleven-agent-events")
-                self.log.add("agent_socket_connected", self.ref)
+                self.url = await self.url_factory(self.context["settings"])
             except Exception as error:
-                self.log.add("agent_start_failed_" + type(error).__name__, self.ref)
-                self.log.provider_failed(provider_problem(error), self.ref)
-                await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
+                await self.start_failed(error)
+                return
+            await self.open_conversation()
         elif isinstance(frame, InputAudioRawFrame) and direction == FrameDirection.DOWNSTREAM:
             if self.websocket is None:
                 return
@@ -155,6 +158,30 @@ class ElevenAgentBridge(FrameProcessor):
             await self.push_frame(frame, direction)
         else:
             await self.push_frame(frame, direction)
+
+    async def media_ready(self):
+        """Called by the session when the WebRTC peer connects."""
+        self.media_connected = True
+        await self.open_conversation()
+
+    async def open_conversation(self):
+        """Open the agent conversation once both the signed URL and connected media are there."""
+        if not (self.url and self.media_connected) or self.opening or self.stopping:
+            return
+        self.opening = True
+        try:
+            self.websocket = await connect(self.url, open_timeout=15, max_size=2_000_000)
+            await self.websocket.send(json.dumps({"type": "conversation_initiation_client_data",
+                                                  "dynamic_variables": self.context["dynamic_variables"]}))
+            self.receive_task = self.create_task(self.receive(), name="eleven-agent-events")
+            self.log.add("agent_socket_connected", self.ref)
+        except Exception as error:
+            await self.start_failed(error)
+
+    async def start_failed(self, error):
+        self.log.add("agent_start_failed_" + type(error).__name__, self.ref)
+        self.log.provider_failed(provider_problem(error), self.ref)
+        await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
 
     async def handle_event(self, message):
         kind = message.get("type")
@@ -276,8 +303,7 @@ class AgentSession:
         @self.transport.event_handler("on_client_connected")
         async def connected(transport, client):
             log.add("rtc_connected", ref, media=media_path(connection))
-            if hasattr(self.bridge, "media_ready"):
-                await self.bridge.media_ready()  # Grok: the greeting waits for connected media
+            await self.bridge.media_ready()  # the greeting waits for connected media
 
         @self.transport.event_handler("on_client_disconnected")
         async def disconnected(transport, client):

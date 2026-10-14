@@ -123,8 +123,10 @@ def test_inbound_call_exchanges_audio_runs_tool_and_terminates_after_agent_ends(
         return kapso, agent, done, app
     kapso, agent, done, app = asyncio.run(go())
     assert kapso.actions == ["pre_accept", "accept", "terminate"]
-    # The agent (and its greeting) starts only after accept succeeded.
+    # The agent (and its greeting) starts only after accept succeeded and the call's media connected.
     assert agent.connected_after == [["pre_accept", "accept"]]
+    names = [e["event"] for e in app.state.log.events]
+    assert names.index("rtc_connected") < names.index("agent_socket_connected")
     session = agent.sessions[0]
     assert session.closed and session.bridge.audio_in > 0 and session.bridge.audio_out > 0
     assert done["tool"]["ok"] is True and done["tool"]["slots"]
