@@ -34,7 +34,7 @@ RULES = {
 ALLOWED_VALUES = {"SAz9YHcvj6GT2YYXdXww"}
 # The only binary files allowed: public artwork, pinned by path and SHA-256. Any other binary, or
 # a changed copy of these, is a finding. Update the hash only after you look at the new image.
-PUBLIC_ASSETS = {"assets/kapso-voice-agent-starter.png": "85bfd608cf427e73976271402c3355ad6c1fe5d19064a8f18dd699b93476b233"}
+PUBLIC_ASSETS = {"assets/kapso-voice-agent-starter.png": "2cf0b46c4d2cd56c56337476693ba17b6f9f5e62b6c13b453593747ec53acf1b"}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 

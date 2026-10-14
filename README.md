@@ -1,6 +1,6 @@
 # Kapso WhatsApp voice agent starter
 
-![Kapso: WhatsApp voice agents, open-source starter](assets/kapso-voice-agent-starter.png)
+![Kapso WhatsApp Voice Agent: gokapso/whatsapp-voice-agent-starter](assets/kapso-voice-agent-starter.png)
 
 Answer WhatsApp calls with your own AI front desk. Riley, the sample agent, says it is an AI
 and answers questions about your business. After a clear yes, it books, moves or cancels
