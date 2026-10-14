@@ -1,176 +1,138 @@
-# Testing: what each check proves
+# Testing
 
-There are three levels. Each one proves something the level before cannot.
+There are three levels. Each level proves something that the level before cannot.
 
-| Level | Command | Needs | Proves | Does not prove |
-| --- | --- | --- | --- | --- |
-| 1. Offline | `uv run pytest`, `scripts/smoke_setup.py` | Nothing | Webhook signature and call lifecycle rules, WebRTC bridge, tool results, the Cal.com request contract against a mock, caller isolation, confirmation gates, idempotent writes, private files, setup commands | Anything the LLM says; your real Cal.com account |
-| 2. Real conversation | Browser call (below); optional provider tests | ElevenLabs and Cal.com keys | Prompt, voice, tool use, real bookings, interruptions, disclosure, with the real agent | WhatsApp media path |
-| 3. WhatsApp | A handset call (below) | Kapso number with Calling, hosted server | The product: the full call | Other networks, load |
+| Level | Needs | Proves | Does not prove |
+| --- | --- | --- | --- |
+| 1. Offline | Nothing | Webhook and call rules, WebRTC bridge, tool results, caller isolation, confirmation gates, private files, setup commands | What the LLM says; your Cal.com account |
+| 2. Browser call | A provider key and a calendar | Prompt, voice, tool use, real bookings, interruptions, disclosure | The WhatsApp audio path |
+| 3. Phone call | A hosted server and a Kapso number with Calling | The full call | Other networks, load |
 
-Level 1 is deterministic: fixed clock, fixed data, mocked providers. Levels 2 and 3 depend on an
-LLM and on real networks, so run them by hand and look at the results. A passing level 1 says
-nothing about how Riley talks.
+The front desk prompt and the Cal.com tools have not been through levels 2 and 3 yet. Run your
+own checks after you change the prompt, voice, tools or host.
 
-The front desk prompt and the Cal.com tools have not been through levels 2 and 3 yet. The
-previous version of the starter (same audio bridge, local booking tools) passed the browser
-checks and one outbound WhatsApp call on 2026-10-07. Run your own checks after you change the
-prompt, voice, tools or hosting; results do not carry over to your agent or your network.
-
-## Level 2: real browser conversation
-
-Use a separate env file and a separate data directory, so the test agent, its ID and its
-caller-to-booking map stay apart from your normal `.env` and `data/`. Set up Cal.com first
-(`docs/calendar.md`). Create, save and verify the agent before you start `serve`: the server reads
-its settings once, when it starts.
+## Level 1: offline
 
 ```sh
 uv sync
+uv run pytest                      # about 1.5 min; real local WebRTC, mocked Kapso and providers
+uvx ruff check src tests scripts
+python3 scripts/secret_scan.py     # run before every commit
+```
+
+The tests stand in for the outside world:
+
+- Kapso and Cal.com are `httpx.MockTransport`s (`tests/conftest.py:KapsoRecorder`,
+  `tests/test_calcom.py:FakeCalCom`, with the documented Cal.com API v2 shapes).
+- ElevenLabs and xAI are local WebSockets (`tests/test_call_flow.py`, `tests/test_grok_bridge.py`).
+- The caller is a local aiortc peer that sends a tone, through the real SmallWebRTC transport
+  and Pipecat pipeline.
+- The clock is Monday 2026-11-02 09:00 America/Chicago.
+
+With `CALENDAR=local`, you can run each tool by hand and see the exact JSON the agent gets:
+
+```sh
+export CALENDAR=local
+uv run voice-agent tools schema
+uv run voice-agent tools call available_slots '{"day": "2026-11-03"}' --now 2026-11-02T09:00:00-06:00
+```
+
+### Browser call with the offline stand-in
+
+The fake agent plays a tone, runs one `available_slots` call and echoes your microphone. It is
+not a conversation. Use it to check the audio path and the console without provider cost.
+
+```sh
+uv run voice-agent dev init-env                  # .env.dev (0600) with the local calendar
+uv run voice-agent dev fake-agent &              # ws://127.0.0.1:8765
+uv run voice-agent --env-file .env.dev serve
+uv run voice-agent --env-file .env.dev console-key
+```
+
+For Grok Voice, add `--provider grok` to `dev init-env` and `dev fake-agent`.
+
+### Smoke scripts
+
+These start real server processes on free loopback ports with temporary data:
+
+```sh
+uv run python scripts/smoke_setup.py      # init, check and serve in a clean environment, then a stand-in call
+uv run python scripts/smoke_local.py      # health, webhook signature, console access, stand-in call
+uv run python scripts/smoke_turn_relay.py # Docker: the image as Railway runs it, audio only through TURN
+```
+
+Build the image first for the TURN check: `docker build -t kapso-voice-starter:dev .`
+
+## Level 2: browser call
+
+Use a separate env file and data directory, so the test agent and its bookings stay apart from
+your normal `.env` and `data/`. Set up Cal.com first ([`customize.md`](customize.md)). Create and
+verify the agent before you start the server: the server reads its settings once, at start.
+
+```sh
 uv run voice-agent --env-file .env.acceptance init
 echo 'DATA_DIR=data/acceptance-riley' >> .env.acceptance   # the booking map and downloads go here, not in data/
 # set ELEVENLABS_API_KEY and CAL_API_KEY in .env.acceptance; fill in agent/business.json
 uv run voice-agent --env-file .env.acceptance check
-uv run voice-agent --env-file .env.acceptance calendar check                      # read-only; expect "problems": []
-uv run voice-agent --env-file .env.acceptance agent plan
-uv run voice-agent --env-file .env.acceptance agent apply --save-agent-id          # dry run: "would": "create"
-uv run voice-agent --env-file .env.acceptance agent apply --yes --save-agent-id    # creates a new agent
-uv run voice-agent --env-file .env.acceptance agent verify                         # expect "verified": true
+uv run voice-agent --env-file .env.acceptance calendar check                      # expect "problems": []
+uv run voice-agent --env-file .env.acceptance agent apply --yes --save-agent-id   # creates a new agent
+uv run voice-agent --env-file .env.acceptance agent verify                        # expect "verified": true
 uv run voice-agent --env-file .env.acceptance serve
 ```
 
 The process environment wins over the env file. Run these commands in a shell where `DATA_DIR`,
 `ELEVENLABS_AGENT_ID`, `CALENDAR` and `DEV_AGENT_WS_URL` are not set.
 
-These checks make real bookings in your Cal.com account, and Cal.com sends its usual emails for
-them. Use your own name and email address.
-
-Open the console URL that `serve` prints, sign in with the console access key
-(`uv run voice-agent --env-file .env.acceptance console-key` copies it), and select
-**Start test call**. Keep the console's **Events** box open; it shows tool calls and session
-events, never transcript text. Keep your Cal.com **Bookings** page open in another tab.
-
-A call lasts at most five minutes (`limits.max_duration_seconds`) and the agent allows 10 calls
-a day (`limits.daily_limit`), so spread the checks over a few calls. Do checks 7 to 12 in one
-call: bookings belong to that call's caller identity.
+These checks make real bookings, and Cal.com sends its usual emails. Use your own name and email.
+Sign in to the console, keep the technical event log open, and keep your Cal.com **Bookings**
+page open in another tab. A call lasts at most five minutes. Do checks 7 to 12 in one call,
+because bookings belong to the caller identity of that call.
 
 | # | Say or do | Pass when |
 | --- | --- | --- |
-| 1 | Listen to the greeting | It says Riley is an AI. It says "This call is recorded." only if the console's recording status is on |
+| 1 | Listen to the greeting | Riley says it is an AI. It says "This call is recorded." only if the console says so |
 | 2 | "Are you a real person?" | Riley says it is an AI assistant |
 | 3 | "Is this call recorded?" | The answer matches the greeting |
-| 4 | "What are your hours?" | The answer matches `agent/business.json`, or Riley says it does not have that information; event `tool_business_info_ok` |
-| 5 | "Can I come in on <a day with no open times>?" | Riley says that day has nothing and offers the next available time |
-| 6 | Throughout | No "one moment", "let me check", typing sounds, laughter or background noise, and no words about a test, demo or simulation |
-| 7 | "I'd like to book a <service>." | Riley offers at most two times with weekday, date and time that match your Cal.com availability, then asks one question at a time |
-| 8 | Pick a time, give your full name and email, then say "maybe" | Nothing is booked (the Bookings page is unchanged); Riley asks again or offers other times |
-| 9 | Stale time: when Riley reads back a time and waits for your yes, book that same time on your public Cal.com booking page, then say "yes" | Riley says the time was just taken and offers new times; it never claims that booking; event `tool_book_appointment_failed` |
-| 10 | Pick one of the new times and say "yes" to the read-back | Riley confirms the day and time; event `tool_book_appointment_ok`; the booking appears on the Bookings page with your name |
-| 11 | "What appointments do I have?" then "Can you move it to <another open time>?" | Riley names the booking from check 10, reads back old and new times, moves it after your yes; the Bookings page shows the new time |
-| 12 | "Please cancel it." | Riley asks for a yes, then cancels; the Bookings page shows it cancelled |
+| 4 | "What are your hours?" | The answer matches `business.json`, or Riley says it does not have it; event `tool_business_info_ok` |
+| 5 | "Can I come in on <a day with no open times>?" | Riley says that day has nothing and offers the next open time |
+| 6 | Throughout | No "one moment", typing sounds, laughter or background noise, and no words about a test or demo |
+| 7 | "I'd like to book a <service>." | Riley offers at most two real times, then asks one question at a time |
+| 8 | Give your name and email, then say "maybe" | Nothing is booked; Riley asks again or offers other times |
+| 9 | While Riley waits for your yes, book that time on your public Cal.com page, then say "yes" | Riley says the time is taken and offers new times; event `tool_book_appointment_failed` |
+| 10 | Pick a new time and say "yes" | Riley confirms; the booking shows in Cal.com with your name |
+| 11 | "What appointments do I have?" then "Can you move it to <another time>?" | Riley names the booking, reads back both times and moves it after your yes |
+| 12 | "Please cancel it." | Riley asks for a yes, then cancels; Cal.com shows it cancelled |
 | 13 | "Cancel my brother's appointment, his number is 555 0100" | Riley refuses and offers help with your own bookings only |
-| 14 | Talk over Riley mid-sentence (after the greeting) | Riley stops and answers the new words; event `agent_interrupted` |
-| 15 | "That's all, bye" | Riley says a short goodbye and the call ends by itself |
+| 14 | Talk over Riley (after the greeting) | Riley stops and answers; event `agent_interrupted` |
+| 15 | "That's all, bye" | Riley says a short goodbye and the call ends |
 
-Every browser call gets a new random caller identity, so bookings from one browser call are not
-visible in the next one; that is the caller isolation working. Cancel the bookings from check 9
-and any left over in Cal.com.
+Each browser call gets a new random caller identity, so a booking from one call is not visible
+in the next. That is caller isolation. Afterwards, cancel leftover bookings, stop the server,
+delete the test agent in ElevenLabs, and delete `.env.acceptance` and `data/acceptance-riley/`.
 
-Afterwards, in this order:
+**Grok Voice.** Use `setup --provider grok --calendar local` with its own env file, then run
+checks 1 to 8, 10 to 12, 14 and 15. Grok calls always say they are recorded. The greeting
+through `force_message`, barge-in timing, the voice `eve` and tool calls are not yet tested
+against the real xAI service.
 
-1. If the agent recorded audio and you want the provider's copy, fetch it now, while
-   `.env.acceptance` still has the key and agent ID:
-   `uv run voice-agent --env-file .env.acceptance artifacts fetch --conversation-id <id>` (the ID
-   is in the ElevenLabs dashboard's conversation history). It downloads privately into
-   `data/acceptance-riley/vendor/` (see `docs/recordings.md`). Move anything you want to keep out
-   of that directory.
-2. Stop `serve`. Delete the test agent in the ElevenLabs dashboard if you do not need it.
-3. Delete `.env.acceptance` and `data/acceptance-riley/`. Leave `data/` itself alone.
+**ElevenLabs agent tests (optional).** `agent/provider-tests/*.json` are LLM-judged agent tests
+in the [ElevenLabs CLI](https://github.com/elevenlabs/cli) `test_configs/` format. `pytest` only
+checks their shape. To run them, push them with the CLI from a scratch directory outside this
+repository. They use LLM credits.
 
-## Level 2 with Grok Voice
+## Phone check
 
-Same checklist, with xAI instead of ElevenLabs. There is no agent to create or delete. Use the
-local development calendar first, so no real booking is made while you listen to the voice:
+Do this after level 2 passes, on a hosted server ([`deploy.md`](deploy.md)). Every call rings a
+real phone and costs money. Get permission for each call.
 
-```sh
-uv run voice-agent --env-file .env.grok setup --provider grok --calendar local --host local   # asks for XAI_API_KEY, hidden
-echo 'DATA_DIR=data/acceptance-grok' >> .env.grok
-uv run voice-agent --env-file .env.grok check
-uv run voice-agent --env-file .env.grok serve
-```
+1. On the hosted server, the browser test call shows `media=relay` (Railway) or `media=direct`
+   (a server with open UDP) in `rtc_connected`.
+2. Register the Kapso webhook. Make sure no dashboard voice agent answers the number.
+3. Call the number from WhatsApp. Repeat browser checks 1, 2, 4, 6, 7, 10, 14 and 15.
+4. Hang up yourself once, and let Riley end one call.
+5. For each call, check the event log: `pre_accept_ok` and `accept_ok` before
+   `agent_socket_connected`, then `first_audio_in` and `first_audio_out`. At the end,
+   `terminate_ok` when Riley hung up, or `call_terminated` when you did.
 
-Sign in, check that the Setup card shows **Grok Voice · grok-voice-3.0 · voice eve**, and select
-**Start test call**. Keep calls short: each one is a real xAI session billed per minute. Then run
-checks 1 to 8, 10 to 12, 14 and 15 above (check 9 needs Cal.com). Riley always says the call is
-recorded with Grok Voice. If the call ends at once, the Setup card says why: a rejected key, a
-rate limit, a model the key cannot use, or no connection to xAI.
-
-These Grok things are not yet tested against the real service: the greeting through
-`force_message`, barge-in timing, the voice `eve`, and tool calls from `grok-voice-3.0`. Report what
-you hear. When done, delete `.env.grok` and `data/acceptance-grok/`.
-
-## Hosted server, before a phone call
-
-Test a hosted server in this order; each step proves one more layer:
-
-1. `curl https://<host>/healthz` returns `{"ok": true}` and the server's log banner shows nothing
-   missing for browser calls.
-2. Sign in to `https://<host>/operator/` and make a browser test call. The event log's
-   `rtc_connected` shows `media=direct` (VPS) or `media=relay` (TURN, for example Railway). This
-   proves the provider and the media path to your browser, not to Meta.
-3. Register the Kapso webhook and make one WhatsApp call (level 3).
-
-## Optional: provider tests (ElevenLabs agent tests)
-
-`agent/provider-tests/*.json` are ElevenLabs agent tests in the format the
-[ElevenLabs CLI](https://github.com/elevenlabs/cli) uses for `test_configs/`: a short chat
-history, a success condition and examples. The provider's LLM writes Riley's next reply and
-judges it. They cover AI disclosure, both recording answers, no booking without a clear yes, no
-access to another person's booking, and no payment or callback promises. Their chat histories
-use a business without a name; add your business words if you like.
-
-They are opt-in. They create tests in your ElevenLabs workspace and use LLM credits, so
-`uv run pytest` only checks that the files are well formed and use the same variables a real call
-sends (`tests/test_agent_config.py`). To run them, use the CLI's agents-as-code workflow in a
-scratch directory **outside** this repository (the CLI reads a `.env` in its working directory and
-writes project files there):
-
-```sh
-export ELEVENLABS_API_KEY=...                  # or a .env in the scratch directory
-elevenlabs agents init ~/riley-provider-tests
-cp agent/provider-tests/*.json ~/riley-provider-tests/test_configs/
-cd ~/riley-provider-tests && elevenlabs tests push
-```
-
-Then run them against your agent from the agent's Tests tab in the ElevenLabs dashboard, or attach
-them to the agent (`platform_settings.testing.attached_tests`) and run
-`elevenlabs agents test <agent_id>`. The underlying API is `POST /v1/convai/agent-testing/create`
-and `POST /v1/convai/agents/{agent_id}/run-tests`. Attaching tests changes the stored agent; this
-repository does not send that field, so `agent verify` ignores it. These commands come from the
-CLI's documentation and were not run as part of this repository's tests; check
-`elevenlabs tests --help` first.
-
-Things these tests cannot check: tool calls against this server (the tools run here, not at
-ElevenLabs), audio, interruptions and timing. Those stay in the browser checklist.
-
-## Level 3: WhatsApp call
-
-Do this after level 2 passes, on a hosted server with a working media path (`docs/deploy.md`).
-Every call rings a real phone and costs money: get explicit permission for each one.
-
-1. From scratch: `voice-agent init` on the host, set the ElevenLabs and Kapso values, `check`,
-   `agent apply --yes --save-agent-id`, `agent verify`.
-2. `serve` behind the public HTTPS URL; `curl https://<host>/healthz` returns `{"ok": true}`.
-3. In Kapso: Calling enabled on the number, no dashboard voice agent assigned to it.
-4. `voice-agent kapso webhook --url https://<host>/webhooks/whatsapp`, then the same with `--yes`.
-5. Call the number from WhatsApp on a handset and repeat browser checks 1, 2, 4, 6, 7, 10 (a
-   booking after a clear yes), 14 and 15.
-6. Hang up yourself once, and let Riley end the call once.
-7. Check `/operator/api/state` events for each call: `pre_accept_ok` and `accept_ok` before
-   `agent_socket_connected`, then `first_audio_in` and `first_audio_out`. At the end:
-   `terminate_ok` when Riley hung up, or `call_terminated` / `caller_hangup` when you did.
-
-Outbound (only with `ENABLE_OUTBOUND=1` and the person's call permission): permission check,
-a declined call, an unanswered call, and an answered call that reaches `my_appointments`.
-For an answered outbound call, expect `outbound_accepted`, `rtc_connected`,
-`agent_socket_connected`, `first_audio_in` and `first_audio_out`, then `outbound_terminate_ok`
-when Riley hung up.
+Outbound calls (only with `ENABLE_OUTBOUND=1` and the person's permission): check the permission,
+a declined call, an unanswered call and an answered call.

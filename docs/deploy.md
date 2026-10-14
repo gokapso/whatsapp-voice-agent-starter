@@ -1,180 +1,173 @@
-# Deploy and connect to Kapso
+# Deploy and connect WhatsApp
 
-Nothing in this guide runs by itself. Each step that changes a provider is an explicit
-operator command with `--yes`, run after you read its dry-run output.
+Do README step 1 first: a browser test call must work on your computer. This guide then hosts
+the server on Railway, connects your Kapso number and checks a real phone call.
 
-## 1. Before you start
+Nothing here runs by itself. Each command that changes a provider is a dry run until you add
+`--yes`.
 
-- Step 1 of the README done: a real browser conversation with your agent works on your machine.
-- A Kapso project with a **dedicated Cloud API number** that Meta allows to use Calling. Kapso's
-  messaging sandbox is not a Calling test number. Check Kapso's Calling setup guide for Meta's
-  current eligibility rules.
-- A voice provider: an ElevenLabs account with Agents access and the voice you want, or an xAI
-  API key for Grok Voice (`VOICE_PROVIDER=grok`; then skip section 4).
-- A Cal.com account with an event type for each service, and `agent/business.json` filled in
-  (`docs/calendar.md`).
-- A host for this server with a public HTTPS URL **and** a working media path (section 3).
+## What the server needs
 
-## 2. Configure
-
-On the host (or copy your tested `.env` there; it holds secrets, keep it 0600):
-
-```sh
-uv run voice-agent init           # writes .env (0600) with OPERATOR_TOKEN, CALLER_KEY_SECRET, WHATSAPP_WEBHOOK_SECRET
-# set ELEVENLABS_API_KEY, CAL_API_KEY, KAPSO_API_KEY and WHATSAPP_PHONE_NUMBER_ID in .env
-uv run voice-agent check          # offline; fix every reported problem
-uv run voice-agent calendar check # reads your Cal.com account; fix every reported problem
-```
-
-`init` never overwrites an existing file. `voice-agent secrets` prints fresh values if you
-manage the environment another way (for example a secret store feeding the container).
-
-## 3. Networking: signaling vs media
-
-| Traffic | Path | What you must provide |
+| Traffic | Path | What you provide |
 | --- | --- | --- |
-| Webhooks from Kapso | HTTPS POST to `/webhooks/whatsapp` | Public HTTPS URL (reverse proxy, load balancer or tunnel) to port 8080 |
-| Call actions + SDP | This server → `https://api.kapso.ai` | Outbound HTTPS |
-| Agent conversation | This server → `wss://api.elevenlabs.io` | Outbound HTTPS/WSS |
-| Calendar | This server → `https://api.cal.com` | Outbound HTTPS |
-| **Call audio** | WebRTC (ICE/DTLS/SRTP over UDP) between Meta and this server | A reachable address for this server's media, or a TURN relay |
+| Kapso webhooks and the console | HTTPS to `/webhooks/whatsapp` and `/operator/` | A public HTTPS URL |
+| Call actions, provider, Cal.com | Outbound HTTPS and WebSocket | Normal internet access |
+| **Call audio** | WebRTC (UDP) between Meta and the server | Open UDP, or a TURN relay |
 
-An HTTPS tunnel for port 8080 delivers webhooks but **does not carry audio**. If the call
-connects and nobody hears anything, it is almost always the media path.
+An HTTPS URL alone does not carry call audio. If a call connects and nobody hears anything, the
+audio path is almost always the cause. The server also needs a long-lived process and a private
+disk for `DATA_DIR` (the map of which caller owns which booking).
 
-Options for media:
+Run **one** server for each phone number. Call state is in memory, so the webhooks must reach
+the server that carries the call audio.
 
-1. **Host with a public IP, no NAT in the way** (simplest): run directly or with Docker
-   `network_mode: host` (Linux); [`examples/vps`](../examples/vps) has a Compose file with Caddy
-   for HTTPS. Allow inbound/outbound UDP. aiortc uses random UDP ports; it has no port-range
-   setting, so a firewall must allow the ephemeral range. Hetzner Cloud firewalls, for example,
-   are stateful and block all inbound traffic without a rule
-   ([FAQ](https://docs.hetzner.com/cloud/firewalls/faq/)); whether replies to the server's own
-   UDP checks are enough for Meta's media was not tested, so add an inbound UDP rule.
-2. **Behind NAT, in Docker bridge networking, or on a host without inbound UDP (Railway):** relay
-   through TURN. Either set `TURN_PROVIDER=cloudflare` with `CLOUDFLARE_TURN_KEY_ID` and
-   `CLOUDFLARE_TURN_API_TOKEN` (fresh credentials for every call; `TURN_TRANSPORT=tls` relays over
-   TCP 443), or put a TURN server with long-lived credentials in `ICE_SERVERS_JSON`, for example
-   `[{"urls":"turn:turn.example.com:443?transport=tcp","username":"u","credential":"p"}]`.
-   aiortc uses only the **first** STUN URL and the **first** TURN URL it can use, so list the one
-   you want first. A STUN entry only helps when the NAT is friendly. See
-   [`deploy-railway.md`](deploy-railway.md).
-3. No server of yours: run each call in Pipecat Cloud ([`examples/pipecat-cloud`](../examples/pipecat-cloud)).
-   Provider SIP is blocked for WhatsApp today. See [`choose-where-calls-run.md`](choose-where-calls-run.md).
+## Railway (recommended)
 
-The event `rtc_connected` in the console's event log shows `media=direct` or `media=relay`, so
-you can see which path a call used.
+Railway gives the server an HTTPS domain, a volume and a managed process. Railway has no inbound
+UDP, so call audio goes through [Cloudflare Realtime TURN](https://developers.cloudflare.com/realtime/turn/).
+The server asks Cloudflare for short-lived TURN credentials before each call. With
+`TURN_TRANSPORT=tls` (the default), the relay uses TCP port 443.
 
-`ICE_SERVERS_JSON=[]` (the default) worked in the tested handset call, where the server ran
-directly on a machine whose network allowed direct media. Do not assume it works on yours.
+### 1. Prepare the env file
 
-## 4. Create the agent (ElevenLabs only)
-
-Do this before you start the server: the server reads `.env` once, when it starts. Skip `apply`
-if you already created the agent in README step 1 and copied its ID into this `.env`.
+Create a TURN key in Cloudflare and copy its key ID and API token. Then:
 
 ```sh
-uv run voice-agent agent plan                    # writes build/agent-config.json, no network
-uv run voice-agent agent apply --save-agent-id   # dry run: says create or update, and where the ID goes
-uv run voice-agent agent apply --yes --save-agent-id   # creates; writes ELEVENLABS_AGENT_ID to .env
-uv run voice-agent agent verify                  # read-back comparison, exit 1 on drift
+uv run voice-agent setup --host railway --whatsapp   # asks for the TURN key and the Kapso values
+uv run voice-agent check
+uv run voice-agent agent apply --yes --save-agent-id  # ElevenLabs only, if you did not do it in step 1
 ```
 
-`--save-agent-id` checks that the env file exists, is a regular file, has no agent ID yet and
-sets `ELEVENLABS_AGENT_ID` at most once, before anything is sent. It changes only that line and
-keeps the file 0600. Without the flag, copy the printed `agent_id` into `.env` yourself.
+### 2. Deploy with the Railway CLI
 
-`agent verify` compares everything the repository sends: settings, the full prompt text, and each
-tool's description, parameters, required fields and response settings. Fields the provider adds
-by itself are ignored; an extra or missing tool, an extra parameter, a tool sound or a background
-sound counts as drift. The comparison is tested against mocked read-backs only. If the provider
-returns tools in another shape (for example only tool IDs), `verify` reports them as missing
-rather than passing; check its output the first time you use it.
-
-When the server starts a real call it also reads the stored agent's `record_voice` (read-only) to
-pick the recording sentence. If that read fails, the call is not answered. See
-`docs/recordings.md`.
-
-`apply --yes` updates an existing agent only if its stored name equals `agent.toml`'s
-`agent.name`. Optional: download the provider's OpenAPI JSON and run
-`voice-agent agent plan --schema path/to/openapi.json` for a structural check.
-
-If a server is already running when you save or change `ELEVENLABS_AGENT_ID`, it keeps the old
-value: restart `serve`, or recreate the container with `docker compose up -d --force-recreate`
-(Compose reads `env_file` only when it creates the container).
-
-## 5. Run
+`railway up` uploads this directory. It reads `.gitignore` and `.railwayignore`, so `.env` and
+`data/` stay on your computer.
 
 ```sh
-uv run voice-agent serve --host 127.0.0.1 --port 8080        # behind your HTTPS proxy
-# or
-docker compose up --build                                     # read compose.yaml comments first
+railway login
+railway init --name whatsapp-voice-agent       # creates the project and links this directory
+railway up --detach                            # creates the service from the Dockerfile
+railway service                                # select the new service
+railway volume add --mount-path /app/data
+uv run voice-agent railway variables           # dry run: lists the variable names
+uv run voice-agent railway variables --yes     # sets them; each value goes through stdin
+railway domain                                 # gives https://<name>.up.railway.app
+railway up --detach                            # deploys with the variables and the volume
 ```
 
-`serve` prints the operator console URL and what is still missing for browser and WhatsApp
-calls; it never prints a secret. The container image is not built by this repository's checks:
-build it, run it and check `/healthz` and a browser call before you rely on it.
+`railway variables` also sets two Railway values:
 
-Build the image from a normal checkout. The image runs as a non-root user and `COPY` keeps file
-modes. If you cloned or extracted the source with a strict umask such as `077`, the copied files
-are readable only by root and the image fails when it starts. Clone again from a shell with
-`umask 022` and rebuild. Do not loosen the mode of `.env`; it is not part of the image.
+- `RAILWAY_RUN_UID=0`: the image starts as root, gives the root-owned volume to its own user,
+  then drops root before the server starts.
+- `ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1`: Railway's health
+  check uses the host `healthcheck.railway.app`, and the image's own health check uses `127.0.0.1`.
 
-The server makes `DATA_DIR` private (0700) at startup and needs to own it. It deletes expired
-local captures and downloads at startup and hourly; if it is often stopped, also schedule
-`voice-agent artifacts prune`.
+These commands come from the Railway CLI 5.12 help. They were not run against a Railway account
+for this repository. If the CLI asks something else, follow its prompts.
 
-The process holds call state in memory. Run **one** instance per phone number. Webhooks must
-reach the same instance that owns a call's media. To scale out you would need shared call
-state and sticky routing by call ID; that is not implemented.
+### 3. Test before WhatsApp
 
-Browser check on the host: open `https://<host>/operator/` (over your VPN or SSH tunnel, see
-`docs/security.md`), sign in with the console access key, select **Start test call**. Your browser needs
-a media path to the server too, so a browser call that works here is a good sign for WhatsApp
-media, not a proof.
+1. `curl https://<name>.up.railway.app/healthz` returns `{"ok": true}`. `railway logs` shows the
+   startup banner, which lists what is missing and never a secret.
+2. Open `https://<name>.up.railway.app/operator/` and sign in. The console access key is the
+   `OPERATOR_TOKEN` variable of the service. `uv run voice-agent console-key` copies the same
+   value from your `.env` file.
+3. Select **Start test call**. In the technical event log, `rtc_connected` must show
+   `media=relay`. This proves the provider and the TURN path to your browser.
 
-## 6. Connect the number (Kapso)
+If the audio does not connect, check the Cloudflare key and `TURN_TRANSPORT`.
 
-1. Enable Calling on the number in the Kapso dashboard (**Phone numbers → Enable calls**) and
-   confirm Meta reports it enabled. This starter does not automate that step.
-2. In the dashboard, check whether a voice agent is already assigned to the number. Decide which
-   one answers: the dashboard agent, the Inbox or this server. Run `voice-agent sip status`: if it
-   shows SIP, Meta sends the calls to that SIP server and this server receives none.
-3. Register this server as the number's Meta webhook:
+### Railway notes
+
+- The console is on the public internet. It needs the console access key on every request, but
+  anyone with the key can start calls. Rotate the key if it leaks: change `OPERATOR_TOKEN` and
+  redeploy.
+- Railway shows variable values to everyone with access to the project.
+- `.railway/railway.ts` describes the same project as code (one service, a 1 GB volume, the health
+  check, one replica). `railway config plan` previews it. It keeps every secret with `preserve()`,
+  so set the variables first.
+- There is no published one-click Railway template for this starter yet. To make your own,
+  deploy once, then use **Project settings > Generate template from project**
+  ([docs](https://docs.railway.com/guides/publish-and-share)). A template deploys from GitHub,
+  not from your local commits.
+
+## Connect the number in Kapso
+
+1. In the Kapso dashboard, enable Calling on a dedicated number (**Phone numbers > Enable
+   calls**). Kapso's messaging sandbox is not a Calling number.
+2. Make sure nothing else answers the calls: no dashboard voice agent on the number, and no
+   answering from the Inbox.
+3. Register the server as the number's Meta webhook:
+
+   ```sh
+   uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp          # dry run
+   uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp --yes    # stops if one exists
+   ```
+
+A number has only one Meta webhook. If one exists, the command stops. Change it on purpose in the
+dashboard, because it also sends other Meta events, such as messages, to this URL. This server
+uses only `calls` changes for `WHATSAPP_PHONE_NUMBER_ID` and ignores the rest.
+
+On a call, Kapso signs the Meta event with `WHATSAPP_WEBHOOK_SECRET` and posts it to the server.
+The server reads the recording setting, answers with `pre_accept` and `accept` through Kapso, and
+starts the agent only after `accept`. The greeting waits until the call audio connects.
+
+## Check with a phone
+
+Every phone call rings a real phone and costs money. Get permission for each call.
+
+1. Call the number from WhatsApp. Riley answers.
+2. Book an appointment after a clear yes. Then hang up once yourself, and let Riley end one call.
+3. In the console, **Recent calls** shows the call. In the event log, look for `pre_accept_ok` and
+   `accept_ok`, then `rtc_connected`, `first_audio_in` and `first_audio_out`.
+
+[`docs/testing.md`](testing.md#phone-check) has the full checklist.
+
+## Other hosts
+
+**A Linux server with a public IP.** Call audio reaches the server directly over UDP, so no TURN
+relay is needed. [`examples/vps`](../examples/vps) has a Compose file with host networking and
+Caddy for HTTPS. Choose `--host vps` in `setup`. Open the firewall to UDP: aiortc uses random
+UDP ports. Keep `/operator` private (VPN or SSH tunnel) if you can.
 
 ```sh
-uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp          # dry run
-uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp --yes    # refuses if one exists
+docker compose up --build    # read compose.yaml first
 ```
 
-Only one Meta webhook is allowed per number. If one exists, the command stops; update it
-deliberately in the dashboard (it also changes where other Meta events go, such as messages).
-This server uses only `calls` changes for `WHATSAPP_PHONE_NUMBER_ID` and ignores the rest, so if
-the number also receives messages, route those elsewhere first.
+**Behind NAT or in Docker bridge networking.** Use a TURN relay: `TURN_PROVIDER=cloudflare`, or
+your own TURN server in `ICE_SERVERS_JSON`. aiortc uses only the first STUN URL and the first
+TURN URL, so put the one you want first.
 
-### What happens on a call
+**Pipecat Cloud (advanced).** Kapso's dashboard Pipecat provider can start one Pipecat Cloud
+session for each call. The session runs this starter's call code, so you host no server. A
+session starts with an empty disk, so a caller can change a booking only in the call that made
+it. There is no console. See [`examples/pipecat-cloud`](../examples/pipecat-cloud). It is tested
+offline only.
 
-1. Meta sends the `connect` event to Kapso; Kapso signs it with `WHATSAPP_WEBHOOK_SECRET` and
-   posts it to `/webhooks/whatsapp`. Unsigned or wrongly signed requests get 401.
-2. The server reads the agent's recording setting (it sends `reject` if it cannot), builds the WebRTC
-   answer, and sends `pre_accept`, then `accept`, through Kapso's call API.
-3. Only after `accept` does the Riley session start, and the greeting waits until the call's audio
-   is connected.
-4. The call ends when Riley uses `end_call` (the server sends `terminate`), when the caller hangs
-   up (Meta's `terminate` webhook), or at `MAX_SESSION_SECONDS`.
+**Not supported:** serverless or HTTP-only platforms. A call needs a long-lived process and an
+audio path.
 
-Details and the outbound sequence: `docs/architecture.md`. Recording sources (ElevenLabs, local
-capture, Meta native): `docs/recordings.md`. This starter does not request Meta-native recording
-or transcription, and it does not transfer calls to a person.
+## Other ways to run calls
 
-## 7. Live verification (manual, needs explicit authorization for each call)
+- **The provider's own WhatsApp integration.** ElevenLabs can answer WhatsApp calls itself, but
+  you import the number into ElevenLabs. Then the number is not in Kapso. This starter does not
+  use that path.
+- **Provider SIP.** Meta can send a number's calls over SIP to ElevenLabs or xAI. The number and
+  its messages stay in Kapso, but SIP replaces the Calling API for that number, so Kapso call
+  actions and Inbox answering stop. Today it is blocked: Meta's WhatsApp SIP offers only the Opus
+  codec, and ElevenLabs and xAI document only G.711 and G.722. ElevenLabs says to contact them
+  about SIP through another provider. Do not switch a number until a provider confirms Opus.
 
-Follow `docs/testing.md` level 3. A greeting alone does not prove a working conversation. Check
-`/operator/api/state` events after each call.
+## What is proven
 
-## Costs to plan for
+- Offline tests cover the webhook, the call lifecycle, real local WebRTC, both providers (with
+  stand-ins), the tools and the TURN relay in local Docker containers.
+- One real outbound WhatsApp call reached a handset on 2026-10-07 with ElevenLabs and earlier
+  tools. The Cal.com tools, Grok Voice and Railway have not been on a real call yet.
+- No Railway, Cloudflare TURN or Pipecat Cloud deployment was made for this repository.
 
-Separate bills apply: WhatsApp calling through Kapso (Kapso credits can be used to pay for your
-WhatsApp calls), the voice provider (ElevenLabs Agents usage), your hosting and bandwidth, a TURN
-service if you use one, and storage for any recordings you keep. Check each provider's current
-pricing; this repository does not state rates.
+## Costs
+
+These are separate bills: WhatsApp calling through Kapso, the voice provider (per minute),
+hosting and bandwidth, the TURN relay, and storage for recordings. Check each provider's
+pricing. This repository does not state rates.

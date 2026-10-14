@@ -1,83 +1,91 @@
-# Security model
+# Security, privacy and recordings
 
 ## Surfaces
 
 | Surface | Who can reach it | Protection |
 | --- | --- | --- |
 | `POST /webhooks/whatsapp` | The internet | HMAC-SHA256 over the raw body with `WHATSAPP_WEBHOOK_SECRET`, checked before JSON parsing; 1 MB cap; only `calls` changes for the configured phone number ID; invalid events ignored without side effects |
-| `POST /webhooks/xai-sip` | The internet | Absent (404) unless `XAI_SIP_WEBHOOK_SECRET` is set; Standard Webhooks v1 signature (HMAC-SHA256 over `id.timestamp.body`) checked before JSON parsing, timestamp within 5 minutes; 1 MB cap; one control session per `call_id`; the caller identity comes from the call's SIP headers |
 | `GET /healthz` | The internet | Returns `{"ok": true}` only |
-| `/operator/*` | Anyone who can reach the port | Absent (404) unless `OPERATOR_TOKEN` (≥ 32 chars, the "console access key") is set; API needs `Authorization: Bearer`; constant-time compare; bearer header is not sent automatically by browsers, so no CSRF; page has a strict CSP and no embedded secrets; the console keeps the key in `sessionStorage` for that tab only, never in a URL or `localStorage` |
-| Outbound calling | Operator only | Also needs `ENABLE_OUTBOUND=1`; permission check before every connect; one attempt, never auto-retried |
-| Agent conversation | Server only | ElevenLabs: signed URL fetched server-side; agent requires auth; URL host pinned to `wss://api.elevenlabs.io`. Grok Voice: `XAI_API_KEY` sent only as a header from this server to the fixed `wss://api.x.ai/v1/realtime`. `DEV_AGENT_WS_URL` limited to loopback |
-| TURN relay | Server only | `CLOUDFLARE_TURN_API_TOKEN` stays on the server; per-call TURN credentials go only into this server's ICE agent, never to a browser or a log |
-| Calendar | Server only | `CAL_API_KEY` stays on the server; fixed host `https://api.cal.com`, no redirects, short timeouts; the model never sees Cal.com uids and cannot pass an identifier to look anything up |
-| Recordings, bookings | Local filesystem only | No HTTP route serves files; `DATA_DIR` 0700, files 0600 (SQLite journal included) under any umask; size, count and age caps, pruned at startup and hourly |
+| `/operator/*` | Anyone who can reach the port | Absent (404) unless `OPERATOR_TOKEN` (32 or more characters, the "console access key") is set; the API needs `Authorization: Bearer` with a constant-time compare; browsers do not send that header by themselves, so there is no CSRF; the page has a strict CSP and no secrets; the console keeps the key in `sessionStorage` for one tab, never in a URL or `localStorage` |
+| Outbound calling | Operator only | Also needs `ENABLE_OUTBOUND=1`; a permission check before every connect; one attempt, never retried |
+| Voice provider | Server only | ElevenLabs: signed URL fetched by the server, host pinned to `wss://api.elevenlabs.io`. Grok Voice: `XAI_API_KEY` sent only as a header to `wss://api.x.ai/v1/realtime`. `DEV_AGENT_WS_URL` is loopback only |
+| TURN relay | Server only | `CLOUDFLARE_TURN_API_TOKEN` and the per-call TURN credentials never go to a browser or a log |
+| Calendar | Server only | `CAL_API_KEY` stays on the server; fixed host `https://api.cal.com`, no redirects, short timeouts; the model never sees Cal.com uids |
+| Bookings, recordings | Local disk only | No HTTP route serves files; `DATA_DIR` 0700 and files 0600 (SQLite journal included) under any umask |
 
-Pipecat Cloud sessions (`cloud.py`) have no public route of their own. Their start body is not
-signed, so each call is looked up through Kapso's API first, and the caller identity is taken from
-Kapso's saved call. The body's `whatsapp_token` is never read.
+Pipecat Cloud sessions (`cloud.py`) have no public route. Their start body is not signed, so each
+call is looked up through Kapso's API first, and the caller identity comes from Kapso's saved
+call. The body's `whatsapp_token` is never read.
 
-Recommended: expose only `/webhooks/whatsapp` and `/healthz` publicly at your proxy, and reach
-`/operator` over a VPN or SSH tunnel (`examples/vps` does this). Set `ALLOWED_HOSTS` to your
-hostnames. On hosts with one public HTTPS domain and no tunnel, such as Railway, the console is on
-the internet: keep the generated 43-character key, and rotate it if it leaks.
+Expose only `/webhooks/whatsapp` and `/healthz` publicly if you can, and reach `/operator` over a
+VPN or SSH tunnel (`examples/vps` does this). Set `ALLOWED_HOSTS` to your host names. On Railway
+the console is on the internet: keep the generated 43-character key, and rotate it if it leaks.
 
 `voice-agent init` and `setup` never print the console access key. `voice-agent console-key`
-copies it to the clipboard; `--show` prints it on request. `setup` reads provider keys with
-hidden input and writes them to the 0600 env file only; `railway variables --yes` passes each
-value to the Railway CLI on stdin, never as a command-line argument. `export-env --for
-pipecat-cloud --file` writes a new 0600 file. `sip status` never asks Meta for the SIP password,
-and `sip plan` prints a placeholder in its place.
-
-## Private data on disk
-
-`DATA_DIR` holds the caller-to-booking map for Cal.com (caller keys as HMACs, short ids, Cal.com
-uids, start times), the local development calendar if you use it (names and notes in plain text),
-local captures and provider downloads. Booking names, emails and notes are stored in Cal.com. At startup the server creates `DATA_DIR` as 0700 or
-tightens it to 0700, and refuses to start if it is not a real directory it owns. The SQLite file
-is created 0600 before SQLite opens it, so SQLite's journal files get 0600 too; files left by
-older runs are tightened. Existing parents of `DATA_DIR` are never changed. There is no
-encryption at rest: protect the host and its backups.
+copies it; `--show` prints it on request. `setup` reads provider keys with hidden input and
+writes them only to the 0600 env file. `railway variables --yes` passes each value on stdin,
+never as a command-line argument.
 
 ## Caller isolation
 
-- Inbound identity: `from_user_id` (business-scoped user ID) if present, else `from`. Outbound:
-  the callee's `to_user_id` or the dialed number. Browser tests: a random per-call identity.
+- The identity is the caller's `from_user_id` (business-scoped user ID) or `from` number. For an
+  outbound call, it is the callee. A browser test call gets a random identity.
 - The store keeps `HMAC-SHA256(CALLER_KEY_SECRET, identity)`, not the phone number or BSUID.
-- With Cal.com, a caller can list, move or cancel only bookings in the local map under their own
-  key. The caller's email is written into a new booking; it is never used to look one up.
-- Tools take no identity arguments; extra arguments are rejected. A person whose calls arrive
-  sometimes with a BSUID and sometimes without one may appear as two callers. That is the safe
-  failure: they see fewer bookings, never someone else's.
+- A caller can list, move or cancel only bookings in the local map under their own key. The
+  caller's email goes into a new booking. It is never used to look a booking up.
+- Tools take no identity arguments, and extra arguments are refused. A person who calls with and
+  without a BSUID can show as two callers. That is the safe failure: they see fewer bookings,
+  never someone else's.
 
-## Prompt injection
+Tool results and caller speech can contain instructions. The server enforces the important
+rules itself: identity, the confirmation flag and open times. A confused agent still cannot read
+another caller's booking or book without `confirmed: true`. The agent asks for the yes. For real
+money or actions that cannot be undone, add a server-side two-step confirmation.
 
-Tool results and caller speech can contain instructions. The prompt tells the agent that tool
-results are data, and the server enforces the important rules (identity, confirmation flags,
-slot validity) itself, so a talked-into-it agent still cannot read or cancel another caller's
-booking or book without `confirmed: true`. The confirmation flag still relies on the LLM to ask
-first; for real money or irreversible actions, add a server-side two-step confirmation.
+## Private data on disk
+
+`DATA_DIR` holds the caller-to-booking map (HMAC keys, short ids, Cal.com uids, start times).
+It also holds the local development calendar, local captures and provider downloads. Names,
+emails and notes are in Cal.com. The server makes `DATA_DIR` 0700 at start and refuses to start
+if it does not own it. There is no encryption at rest: protect the host and its backups.
 
 ## Logs
 
-The event log holds event names, short status strings and hashed call references. It never holds
+The event log holds event names, short status values and hashed call references. It never holds
 audio, SDP, transcript text, phone numbers, BSUIDs, raw Meta call IDs, media URLs, file paths or
-keys. Kapso error messages are truncated and have the API key redacted. Pipecat and aiortc write
-their own debug logs to stderr; `voice-agent serve` and the Docker image default to
-`LOGURU_LEVEL=INFO` so connection details stay out of logs. Set `LOGURU_LEVEL=DEBUG` only while
-diagnosing media problems.
+keys. The console's **Recent calls** list is built from this log in memory. It is lost when the
+server restarts. Pipecat and aiortc write their own logs to stderr at `LOGURU_LEVEL=INFO`. Set
+`DEBUG` only while you look for an audio problem.
 
-## What changed from the internal demos this was built from
+## Recordings
 
-- Webhook signature now rejects non-hex/missing headers up front; a batch with another phone
-  number's change ignores that change instead of failing the whole delivery.
-- The operator UI used a per-process token embedded in the page and a host-header allowlist
-  bound to localhost. It now needs a configured bearer token that never appears in the page.
-- Removed: test-only "reject next call" control, macOS launchctl/phone-profile switching, `say`
-  smoke scripts, private snapshot checks, the typing sound, forced pre-tool speech, the "One
-  moment." soft-timeout message and office background ambience.
-- Inbound: the agent now starts after `accept` (it started before `pre_accept`), matching Kapso's
-  guide; failures before accept send `reject`; over-capacity calls are rejected rather than
-  answered with HTTP 409.
-- Tool results now use `{ok, code, message}`; store reads are index-backed and capped.
+Three systems can keep call audio or text. They are separate.
+
+| Source | Default here | What it keeps | Retention |
+| --- | --- | --- | --- |
+| ElevenLabs | On (`privacy.record_audio = true`) | Call audio and the conversation transcript | `privacy.retention_days` (7) at ElevenLabs. `voice-agent artifacts fetch` downloads a private copy |
+| xAI (Grok Voice) | Always | API requests and responses | 30 days at xAI, unless your team has Zero Data Retention ([FAQ](https://docs.x.ai/docs/resources/faq-api/security)) |
+| Local capture | Off (`LOCAL_CAPTURE=0`) | WAV files and the provider's turn text in `DATA_DIR/captures/` | `CAPTURE_RETENTION_DAYS`, `CAPTURE_MAX_COUNT` |
+| Meta native | Not requested | Meta recording or transcript | About 7 days at Meta |
+
+The greeting says "This call is recorded." from the settings in effect, not from `agent.toml`:
+
+- With ElevenLabs, the server reads the stored agent's `record_voice` before a session starts
+  (read-only, kept for 60 seconds). If the read fails, no session starts: an inbound call gets
+  `reject`, and a browser or outbound call gets HTTP 503.
+- With Grok Voice, there is no stored agent, so the greeting always says the call is recorded.
+- With `LOCAL_CAPTURE=1`, the greeting always says the call is recorded.
+- The offline fake agent records nothing.
+
+ElevenLabs keeps the transcript for the retention period even when audio recording is off. Check
+which notice your jurisdiction needs. The starter's wording is a minimum, not legal advice.
+
+Local copies under `DATA_DIR/captures` and `DATA_DIR/vendor` are deleted at server start, every
+hour, before each new capture, and by `voice-agent artifacts prune`. Only directories with the
+names this server makes are deleted, and symlinks are never followed. If the server is often
+stopped, schedule `voice-agent artifacts prune`.
+
+Meta records or transcribes only when the `accept` or `connect` request asks for it. This
+starter does not ask. After such a call, the server only notes the `call_recording_available`
+event; fetch the file through Kapso's API. Kapso's Calls view shows Meta artifacts only, not
+ElevenLabs or local ones.

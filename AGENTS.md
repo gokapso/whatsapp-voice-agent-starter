@@ -14,13 +14,12 @@ recognition, the LLM and text-to-speech. Tools run here, against the owner's Cal
 console can start the same session from a browser, which is how people test the agent before
 connecting a number.
 
-The same call code can run in a Pipecat Cloud session that Kapso starts for each call
-(`cloud.py`, `examples/pipecat-cloud`). Provider-hosted SIP (ElevenLabs, xAI) is prepared as dry
-runs and an xAI control service, but is blocked for WhatsApp today. Start with
-`docs/choose-where-calls-run.md`.
+The voice provider does not decide where the server runs. Railway (with a TURN relay) is the
+recommended host; `docs/deploy.md` covers it, a VPS, and the advanced Pipecat Cloud option
+(`cloud.py`, `examples/pipecat-cloud`), where each call runs in its own session.
 
 Riley is a generic AI front desk. The owner's facts and Cal.com event types are in
-`agent/business.json` (`docs/calendar.md`). `CALENDAR=local` switches to an offline development
+`agent/business.json` (`docs/customize.md`). `CALENDAR=local` switches to an offline development
 calendar (`store.py`, `agent/dev-calendar.json`) used by the tests; it is never the default.
 
 ## Commands
@@ -40,8 +39,6 @@ uv run voice-agent serve                  # http://127.0.0.1:8080; prints the co
 uv run voice-agent dev init-env           # private .env.dev for the offline fake agent
 uv run voice-agent dev fake-agent         # offline agent stand-in (DEV_AGENT_WS_URL): a tone, not a conversation
 uv run voice-agent artifacts prune        # delete expired local captures/downloads (offline)
-uv run voice-agent sip status             # read-only: Calling API or SIP for the number; never reads the SIP password
-uv run voice-agent sip plan --provider elevenlabs --number +15550100000   # dry run: blockers, requests, undo
 uv run voice-agent export-env --for pipecat-cloud --file build/pipecat-cloud.env   # 0600 secret set file
 uv run python scripts/smoke_setup.py      # init/check/serve + fake-agent browser call, clean environment, real processes
 uv run python scripts/smoke_turn_relay.py # Docker: Railway-style container, audio only through a TURN relay
@@ -72,9 +69,8 @@ response settings; fields the provider adds by itself are ignored.
 | Call handling rules | `src/kapso_voice_agent/calls.py`, `outbound.py` | `pytest tests/test_http_surface.py tests/test_call_flow.py tests/test_outbound.py` |
 | Grok Voice protocol, model, voice | `src/kapso_voice_agent/grok_bridge.py`, `agent/agent.toml` `[grok]` | `pytest tests/test_grok_bridge.py` |
 | Pipecat Cloud entry, Kapso launch check | `src/kapso_voice_agent/cloud.py`, `examples/pipecat-cloud/` | `pytest tests/test_cloud_launch.py` |
-| Provider SIP plan, xAI SIP control | `src/kapso_voice_agent/sip.py`, `xai_sip.py`, `examples/*-sip/` | `pytest tests/test_xai_sip.py`, `voice-agent sip plan ...` |
 | TURN, hosting, guided setup | `turn.py`, `setup_wizard.py`, `.railway/railway.ts`, `examples/vps/` | `pytest tests/test_turn.py tests/test_setup_wizard.py`, `scripts/smoke_turn_relay.py` |
-| Operator console | `src/kapso_voice_agent/static/` | `pytest tests/test_http_surface.py`; check it in a browser, light and dark, at 320 px |
+| Operator console | `src/kapso_voice_agent/static/`; state from `app.py` `/operator/api/state`, recent calls from `events.py` | `pytest tests/test_http_surface.py`; check it in a browser, light and dark, at 320 px |
 | Recording notice decision | `src/kapso_voice_agent/recording.py` | `pytest tests/test_privacy_and_retention.py` |
 | Private files, retention | `src/kapso_voice_agent/private.py` | `pytest tests/test_privacy_and_retention.py` |
 
@@ -91,8 +87,7 @@ Tests enforce each of these. Do not weaken a test to make a change pass.
 
 1. **Signed webhook only.** `/webhooks/whatsapp` verifies `X-Webhook-Signature` (hex HMAC-SHA256
    of the raw body) before parsing. Only `calls` changes for `WHATSAPP_PHONE_NUMBER_ID` are used.
-   `/webhooks/xai-sip` is 404 unless `XAI_SIP_WEBHOOK_SECRET` is set and verifies a Standard Webhooks
-   signature first. A Pipecat Cloud launch is answered only after Kapso's API vouches for the call.
+   A Pipecat Cloud launch is answered only after Kapso's API vouches for the call.
 2. **Operator controls are separate.** Everything under `/operator` needs `OPERATOR_TOKEN` and
    returns 404 when it is unset. Outbound calling also needs `ENABLE_OUTBOUND=1`. No secret is
    ever sent to the browser.
