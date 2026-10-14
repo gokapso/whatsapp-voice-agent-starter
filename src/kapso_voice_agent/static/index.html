@@ -10,10 +10,13 @@
 <body>
 <main class="console">
   <header class="page-header">
-    <a class="brand" href="https://github.com/gokapso/whatsapp-voice-agent-starter">
-      <span class="brand-mark" aria-hidden="true">K</span>
-      Kapso <span class="brand-divider" aria-hidden="true">/</span><span class="brand-label">Voice agent starter</span>
-    </a>
+    <div class="brand">
+      <a class="brand-link" href="https://github.com/gokapso/whatsapp-voice-agent-starter">
+        <span class="brand-mark" aria-hidden="true">K</span>Kapso
+      </a>
+      <span class="brand-divider" aria-hidden="true">/</span>
+      <h1 class="brand-title">Voice agent console</h1>
+    </div>
     <div id="session" class="session" hidden>
       <span class="session-label">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
@@ -23,15 +26,9 @@
     </div>
   </header>
 
-  <div class="intro">
-    <h1>Voice agent console</h1>
-    <p>Test your agent from the browser, then connect a WhatsApp number.</p>
-  </div>
-
   <section id="sign-in" class="panel sign-in" aria-labelledby="sign-in-title">
     <h2 id="sign-in-title">Sign in to this server</h2>
-    <p class="lead">Enter this server's console access key. It lets you start test calls and outbound calls.
-      It is not your Kapso, ElevenLabs or xAI API key.</p>
+    <p class="lead">Enter the console access key of this server. It is not your Kapso, ElevenLabs or xAI key.</p>
     <form id="sign-in-form" novalidate>
       <label for="key">Console access key</label>
       <div class="key-row">
@@ -40,87 +37,77 @@
         <button id="sign-in-button" type="submit" class="button primary">Sign in</button>
       </div>
       <p id="key-error" class="field-error"></p>
-      <p id="key-help" class="hint">The key stays in this browser tab and is forgotten when you close the tab.</p>
+      <p id="key-help" class="hint">This browser tab keeps the key until you close the tab.</p>
     </form>
     <details class="help">
       <summary>Where do I find the key?</summary>
       <ol>
-        <li>On the computer that runs the server, open a terminal in the project folder.</li>
-        <li>Run <code>uv run voice-agent console-key</code>. It copies the key to your clipboard without showing it.</li>
-        <li>Paste it above and select <strong>Sign in</strong>.</li>
+        <li>Open a terminal in the project folder, on the computer that runs the server.</li>
+        <li>Run <code>uv run voice-agent console-key</code>. It copies the key to your clipboard and does not show it.</li>
+        <li>Paste the key above and select <strong>Sign in</strong>.</li>
       </ol>
-      <p>The key is <code>OPERATOR_TOKEN</code> in the server's <code>.env</code> file, which <code>voice-agent setup</code>
-        created. On Railway, it is the service's <code>OPERATOR_TOKEN</code> variable. If you change it, restart the server
-        and sign in again.</p>
+      <p>The key is <code>OPERATOR_TOKEN</code> in the <code>.env</code> file of the server. On Railway, it is the
+        <code>OPERATOR_TOKEN</code> variable of the service. If you change it, restart the server.</p>
     </details>
   </section>
 
   <div id="workspace" class="workspace" hidden>
-    <section class="panel status" aria-labelledby="status-title">
-      <div class="panel-heading">
-        <h2 id="status-title" tabindex="-1">Setup</h2>
-        <p id="status-summary" class="hint"></p>
+    <section class="panel test-call" aria-labelledby="readiness-title">
+      <div class="readiness">
+        <svg id="readiness-icon" class="icon readiness-icon" viewBox="0 0 24 24" aria-hidden="true"></svg>
+        <div>
+          <h2 id="readiness-title" tabindex="-1"></h2>
+          <p id="next-step" class="next-step"></p>
+        </div>
       </div>
-      <ul id="checklist" class="checklist"></ul>
       <p id="provider-problem" class="notice" hidden></p>
+      <div class="actions">
+        <button id="start" type="button" class="button primary" disabled>Start test call</button>
+        <button id="mute" type="button" class="button secondary" aria-pressed="false" hidden>Mute</button>
+        <button id="stop" type="button" class="button secondary" hidden>Hang up</button>
+        <span id="timer" class="timer"></span>
+      </div>
+      <p id="call-cost" class="hint call-cost"></p>
+      <p id="call-status" class="call-status" role="status"></p>
+      <audio id="audio" autoplay></audio>
     </section>
 
-    <div class="call-grid">
-      <section class="panel call-panel" aria-labelledby="browser-title">
-        <div class="section-heading">
-          <span class="icon-box" aria-hidden="true">
-            <svg class="icon" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg>
-          </span>
-          <div>
-            <h2 id="browser-title">Test call in your browser</h2>
-            <p id="browser-cost" class="hint"></p>
-          </div>
-        </div>
-        <p id="browser-proves" class="call-description"></p>
-        <div class="actions">
-          <button id="start" type="button" class="button primary" disabled>Start test call</button>
-          <button id="stop" type="button" class="button secondary" disabled>Hang up</button>
-          <span id="timer" class="timer" aria-hidden="true"></span>
-        </div>
-        <p id="call-status" class="call-status" role="status"></p>
-        <audio id="audio" autoplay></audio>
+    <div class="columns">
+      <section class="panel" aria-labelledby="setup-title">
+        <h2 id="setup-title">Setup</h2>
+        <dl id="setup" class="setup-list"></dl>
+        <p class="hint setup-help">To change a setting, run <code>uv run voice-agent setup</code>, then restart the server.</p>
       </section>
 
-      <section class="panel call-panel" aria-labelledby="whatsapp-title">
-        <div class="section-heading">
-          <span class="icon-box" aria-hidden="true">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.4 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.6 1.9Z"/></svg>
-          </span>
-          <div>
-            <h2 id="whatsapp-title">Outbound WhatsApp call</h2>
-            <p class="hint">Rings a real phone. Meta charges per minute.</p>
-          </div>
-        </div>
-        <p id="outbound-off" class="call-description">Off. To turn it on, set <code>ENABLE_OUTBOUND=1</code> and restart the
-          server. The person must first allow your business to call them.</p>
-        <div id="outbound-form" hidden>
-          <label for="recipient">WhatsApp number or business-scoped user ID</label>
-          <input id="recipient" type="tel" autocomplete="off" spellcheck="false" placeholder="15550100002"
-                 aria-describedby="permission-hint">
-          <p id="permission-hint" class="hint">Include the country code. Check permission before you call.</p>
-          <div class="actions">
-            <button id="permission" type="button" class="button secondary">Check permission</button>
-            <button id="dial" type="button" class="button primary" disabled>Call this person</button>
-            <button id="outbound-stop" type="button" class="button secondary" disabled>End call</button>
-          </div>
-          <p id="outbound-status" class="call-status" role="status"></p>
-        </div>
+      <section class="panel" aria-labelledby="recent-title">
+        <h2 id="recent-title">Recent calls</h2>
+        <p class="hint">Calls on this server since it started. The server keeps them in memory only.</p>
+        <ol id="recent" class="recent-list"></ol>
+        <p id="recent-empty" class="empty">No calls yet. Your test calls show here.</p>
       </section>
     </div>
 
+    <section id="outbound" class="panel" aria-labelledby="outbound-title" hidden>
+      <h2 id="outbound-title">Call a WhatsApp number</h2>
+      <p class="hint">This rings a real phone, and Meta bills the call. The person must allow calls from your business first.</p>
+      <label for="recipient">WhatsApp number or business-scoped user ID</label>
+      <input id="recipient" type="tel" autocomplete="off" spellcheck="false" placeholder="15550100002"
+             aria-describedby="permission-hint">
+      <p id="permission-hint" class="hint">Include the country code. Check the permission before you call.</p>
+      <div class="actions">
+        <button id="permission" type="button" class="button secondary">Check permission</button>
+        <button id="dial" type="button" class="button primary" disabled>Call this person</button>
+        <button id="outbound-stop" type="button" class="button secondary" disabled>End call</button>
+      </div>
+      <p id="outbound-status" class="call-status" role="status"></p>
+    </section>
+
     <details class="panel activity">
-      <summary><span class="summary-title">Event log</span> <span class="hint">For debugging. Event names only, no audio or transcripts.</span></summary>
-      <pre id="events" tabindex="0" aria-label="Event log"></pre>
+      <summary><span class="summary-title">Technical event log</span>
+        <span class="hint">Event names for debugging. No audio, transcripts or phone numbers.</span></summary>
+      <pre id="events" tabindex="0" aria-label="Technical event log"></pre>
     </details>
   </div>
-
-  <footer>Kapso Calling <span aria-hidden="true">·</span> <span id="footer-provider">Your voice provider</span>
-    <span aria-hidden="true">·</span> Your tools</footer>
 </main>
 <script src="/operator/app.js"></script>
 </body>

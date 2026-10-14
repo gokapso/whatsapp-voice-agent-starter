@@ -1,66 +1,111 @@
 # Make it yours
 
 Riley is a front desk for any business that takes appointments: a clinic, a salon, a studio, a
-consultant, a repair shop. It answers questions from your business facts, finds real open times
-in your Cal.com calendar, books after a clear yes, and lets callers check, move or cancel their
-own bookings. You bring the facts and the calendar; the flow and the tools stay the same.
+repair shop. It answers questions from your business facts and finds real open times in your
+Cal.com calendar. It books after a clear yes, and callers can check, move or cancel their own
+bookings. You bring the facts and the calendar. The flow and the tools stay the same.
 
-## 1. Your business and calendar
+## 1. Connect Cal.com
 
-Fill in `agent/business.json` and connect Cal.com as described in
-[`docs/calendar.md`](calendar.md). That is all the business data Riley uses:
+Cal.com decides which times are open (schedules, buffers, minimum notice, existing events).
+Every booking Riley makes is a normal Cal.com booking. The integration is one file,
+`src/kapso_voice_agent/calcom.py`, on the [Cal.com API v2](https://cal.com/docs/api-reference/v2/introduction).
 
-- Facts (`business_name`, `description`, `hours`, `address`, `directions`, `website`,
-  `policies`). Leave out anything you do not want said; Riley says it does not have it.
-- Services: one Cal.com event type each. The event type's title, length and availability come
-  from Cal.com.
-- `timezone`: the time zone Riley speaks in.
+1. In Cal.com, create one event type for each service that callers can book. Riley says its
+   title and length, and offers its availability. Do not use seated event types: Riley refuses
+   them, because a change to one seat changes every attendee.
+2. Create an API key under **Settings > Security**. `uv run voice-agent setup` stores it as
+   `CAL_API_KEY`.
+3. Fill in `agent/business.json`:
 
-Then run `uv run voice-agent calendar check` and fix what it reports.
+   ```json
+   {
+     "business_name": "Your business",
+     "timezone": "America/New_York",
+     "description": "One sentence about what you do.",
+     "hours": "Monday to Friday, 9 AM to 5 PM.",
+     "address": "Street, city",
+     "directions": "",
+     "website": "",
+     "policies": ["Please arrive five minutes early."],
+     "services": [
+       {"id": "consultation", "cal_event_type_id": 123456, "notes": "For new clients."}
+     ],
+     "booking": {"horizon_days": 30, "ask_for_email": true}
+   }
+   ```
+
+   - `timezone` is the time zone Riley speaks in. Use the time zone of your Cal.com profile.
+   - `services[].id` is a short name for the agent. `cal_event_type_id` is the event type it
+     books. `notes` (optional) says when to suggest it.
+   - Leave a fact empty if Riley must not state it. Riley then says it does not have it.
+   - `ask_for_email`: Cal.com event types need an email by default, so Riley asks for it and
+     spells it back. Set `false` only if your event types do not need one.
+
+4. Check the setup. This command only reads from Cal.com:
+
+   ```sh
+   uv run voice-agent calendar check
+   ```
+
+   It lists your event types with their IDs. It also lists each problem: a missing time zone, an
+   unknown or seated event type, or a time zone that is not the one in Cal.com.
+
+5. Try the tools. Reads are safe. `tools call` refuses to book, move or cancel without `--yes`,
+   because these change your real calendar.
+
+   ```sh
+   uv run voice-agent tools call available_slots '{"service_id": "consultation"}'
+   ```
+
+Restart the server after you change `.env` or `business.json`.
+
+Cal.com sends its usual emails for each booking. The caller's name, email and note go to
+Cal.com. Say so in your privacy notice.
+
+`CALENDAR=local` is an offline development calendar (`agent/dev-calendar.json`, `store.py`).
+Its bookings are not in any real calendar. Never use it for real callers.
 
 ## 2. Names, greeting and voice
 
 In `agent/agent.toml`:
 
-- `[agent] name` is the provider-side agent name. `assistant_name` is what the agent is called.
-- `[greetings]`: the first words of each call. `{at_business}` adds " at <business_name>".
-  Keep the AI disclosure; `voice-agent check` refuses a greeting without "AI".
+- `[agent] name` is the agent name at the provider. `assistant_name` is what callers hear.
+- `[greetings]` are the first words of each call. `{at_business}` adds " at <business_name>".
+  `voice-agent check` refuses a greeting without "AI".
 - `[asr] keywords`: your business name, service names and other words callers say.
-- `[voice]`, `llm`, `[turn]`, `[limits]`: voice, model and call limits.
+- `[voice]`, `llm`, `[turn]`, `[limits]`: the ElevenLabs voice, model and call limits.
+  `[grok]`: the Grok Voice model and voice.
 
-`agent apply --yes` updates an existing agent only when the stored name matches. After a rename
-it refuses; clear `ELEVENLABS_AGENT_ID` to create a new agent instead.
+With ElevenLabs, `uv run voice-agent agent apply --yes` sends the changes. It updates an agent
+only when the stored name matches. `uv run voice-agent agent verify` reads the agent back and
+reports drift. Grok Voice reads these files on every call, so there is nothing to apply.
 
 ## 3. The prompt
 
-`agent/prompt.md` has short sections. Keep the headings; the tests read "When a tool says no".
+`agent/prompt.md` has short sections. Keep the headings: the tests read "When a tool says no".
+Keep the `{{business_name}}`, `{{today}}`, `{{weekday}}`, `{{timezone}}`, `{{recording_status}}`
+and `{{call_purpose}}` variables. The server fills them for each call.
 
-- **Role**: who the assistant is and the jobs it does. The server fills `{{business_name}}`,
-  `{{today}}`, `{{weekday}}`, `{{timezone}}`, `{{recording_status}}` and `{{call_purpose}}` per
-  call; keep them.
-- **How to talk**: warm, short turns, one question at a time, no filler before tools, times said
-  with the tool's `when` phrase.
-- **Facts come from tools**: the assistant states business facts only from `business_info`.
-- **Booking an appointment**: understand the need, find real times, get name (and email), read
-  back, book only after a clear yes, confirm, ask if there is anything else.
-- **The caller's own appointments**: review, move, cancel.
-- **When a tool says no**: one recovery rule for every error code. If you add a code, add a rule;
-  the tests fail otherwise.
-- **Limits and closing**: what it cannot do, and how to end the call.
+Keep these rules. `AGENTS.md` lists them, and tests enforce them:
 
-Keep these: the AI disclosure in the greetings, the recording sentence decided by the server, no
-"one moment"/"let me check", no performed sounds, and booking only after a clear yes. They are
-the rules in `AGENTS.md`, and tests enforce them. After any prompt change, listen to a real call
-(`docs/testing.md`): only a conversation shows whether it sounds right.
+- The greetings say the caller talks to an AI.
+- The server decides the recording sentence.
+- No "one moment" or "let me check", and no performed sounds.
+- Book, move or cancel only after a clear yes.
+- Each tool error code has a recovery rule in "When a tool says no".
+
+After a prompt change, listen to a real call ([`testing.md`](testing.md)). Only a conversation
+shows if it sounds right.
 
 ## With an AI coding agent
 
-Give your coding agent a request like this one, with your facts filled in:
+Give your coding agent a request like this one, with your facts:
 
 ```text
-Read AGENTS.md, docs/customize.md and docs/calendar.md. Set Riley up as the AI front desk for
-<business name>, a <what it is> in <time zone>.
-Facts: <opening hours>, <address and directions>, <policies, e.g. how to cancel>.
+Read AGENTS.md and docs/customize.md. Set Riley up as the AI front desk for <business name>,
+a <what it is> in <time zone>.
+Facts: <opening hours>, <address and directions>, <policies, for example how to cancel>.
 Services and their Cal.com event type IDs: <service: event type ID>, ...
 Ask for the caller's email: <yes/no>.
 Fill in agent/business.json, add the business words to [asr] keywords in agent/agent.toml, and
@@ -69,34 +114,33 @@ and `uv run pytest`, and fix every failure without weakening a test. Then list t
 checks from docs/testing.md that I should run, with example phrases for this business.
 ```
 
-Review the diff before you apply the agent.
+Review the diff before you apply it.
 
 ## Tools
 
-The six tools follow a few rules that make them reliable for an LLM on a phone line. Keep them
-when you add or change a tool:
+The six tools are `business_info`, `available_slots`, `my_appointments`, `book_appointment`,
+`reschedule_appointment` and `cancel_appointment`. They run on your server. Keep these rules
+when you change a tool:
 
-- **Read before write.** `available_slots` returns the exact `slot` values that
-  `book_appointment` and `reschedule_appointment` accept. The model copies values instead of
-  building them, and Cal.com rejects anything that is not open.
+- **Read before write.** `available_slots` returns exact `slot` values. The model copies them
+  into `book_appointment`, and Cal.com refuses a time that is not open.
 - **Give the model the words to say.** Results carry a `when` phrase ("Tuesday, November 3 at
-  10 AM"), so the model never works out a weekday from an ISO date.
-- **Errors the model can fix.** Every failure is `{"ok": false, "code": ..., "message": ...}`,
-  and the message says what to do next. Only `ok: true` means something changed.
-- **The server enforces the rules that matter.** The caller identity comes from the call, never
-  from arguments, so tools have no phone, name or email lookup. `confirmed` must be the boolean
-  `true`. Retries with the same `tool_call_id` return the first result.
-- **Fast, bounded and honest.** Calendar requests have short timeouts inside the tool's
-  `response_timeout_secs` (15 s), every query has a limit, no transaction stays open across a
-  network call, and a write whose result is unknown is reported as unknown.
+  10 AM"), so the model never works out a weekday.
+- **Errors the model can fix.** A failure is `{"ok": false, "code": ..., "message": ...}`, and
+  the message says what to do next. Only `ok: true` means something changed.
+- **The server enforces the important rules.** The caller identity comes from the call, never
+  from arguments. `confirmed` must be the boolean `true`. A retried `tool_call_id` returns the
+  first result. A booking request is sent once, and an unknown result is `not_confirmed`.
+- **Fast and bounded.** Calendar requests have short timeouts, every query has a limit, and no
+  transaction stays open during a network request.
 
-To add a tool: add a Pydantic `Arguments` model and a `TOOLS` entry in `tools.py` (the
-description is what the provider LLM reads), handle it in `ToolRunner.run` and in both calendars
-(`calcom.py`, `store.py`), add a recovery rule for any new error code, and add tests.
-`uv run voice-agent tools schema` shows what the provider will receive, and `agent verify`
-reports drift after you apply it.
+To add a tool:
 
-To use another calendar service, write a class with the same methods as `CalComCalendar`
-(`info`, `availability`, `book`, `list_own`, `reschedule`, `cancel`, `now`, `timezone`,
-`needs_email`), choose it in `open_calendar` (`app.py`), and test it with an
-`httpx.MockTransport` the way `tests/test_calcom.py` does.
+1. Add a Pydantic `Arguments` model and a `TOOLS` entry in `tools.py`.
+2. Handle it in `ToolRunner.run` and in both calendars (`calcom.py`, `store.py`).
+3. Add a recovery rule in the prompt for each new error code, and add tests.
+4. Run `uv run voice-agent tools schema` to see what the provider gets.
+
+To use another calendar service, write a class with the methods of `CalComCalendar`. Choose it
+in `open_calendar` (`app.py`). Test it with an `httpx.MockTransport`, as `tests/test_calcom.py`
+does.

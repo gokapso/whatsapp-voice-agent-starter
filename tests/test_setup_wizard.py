@@ -34,7 +34,7 @@ def mode(path):
 
 def test_grok_on_railway_writes_a_valid_private_file_and_never_prints_keys(tmp_path):
     path = tmp_path / ".env"
-    prompter, printed = scripted(["2", "2", "3", "n", "cf-key-id-1"], [XAI_KEY, CF_TOKEN])
+    prompter, printed = scripted(["2", "2", "2", "n", "cf-key-id-1"], [XAI_KEY, CF_TOKEN])
     result = run(path, "voice-agent", prompter=prompter)
     settings = load_settings(env_file=path)
     text = "\n".join(printed)
@@ -43,7 +43,7 @@ def test_grok_on_railway_writes_a_valid_private_file_and_never_prints_keys(tmp_p
     assert settings.turn_provider == "cloudflare" and settings.cloudflare_turn_api_token == CF_TOKEN
     assert settings.agent_ready and settings.operator_enabled
     assert XAI_KEY not in text and CF_TOKEN not in text and settings.operator_token not in text
-    assert "Grok Voice (grok-voice-3.0, voice eve)" in text and "docs/deploy-railway.md" in text
+    assert "Grok Voice (grok-voice-3.0, voice eve)" in text and "docs/deploy.md" in text
     assert "Cloudflare TURN (tls)" in text and "xAI bills per minute" in text
 
 

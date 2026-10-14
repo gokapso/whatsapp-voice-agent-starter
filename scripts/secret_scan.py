@@ -9,6 +9,7 @@ a replacement for a dedicated scanner such as gitleaks before publishing.
 """
 
 import argparse
+import hashlib
 from pathlib import Path
 import re
 import subprocess
@@ -31,6 +32,17 @@ RULES = {
 }
 # Public, non-secret values that intentionally appear: ElevenLabs' premade "River" voice ID.
 ALLOWED_VALUES = {"SAz9YHcvj6GT2YYXdXww"}
+# The only binary files allowed: public artwork, pinned by path and SHA-256. Any other binary, or
+# a changed copy of these, is a finding. Update the hash only after you look at the new image.
+PUBLIC_ASSETS = {"assets/kapso-voice-agent-starter.png": "85bfd608cf427e73976271402c3355ad6c1fe5d19064a8f18dd699b93476b233"}
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def binary_finding(name, data):
+    """None for a pinned public asset with its exact bytes, otherwise the rule that fails."""
+    if PUBLIC_ASSETS.get(name) == hashlib.sha256(data).hexdigest() and data.startswith(PNG_SIGNATURE):
+        return None
+    return "binary_file"
 
 
 def publishable_files():
@@ -45,10 +57,12 @@ def scan(extra_values=()):
         if name not in ALLOWED_FILES and FORBIDDEN_FILES.search(name):
             findings.append((name, 0, "forbidden_file"))
             continue
+        data = (ROOT / name).read_bytes()
         try:
-            text = (ROOT / name).read_text()
+            text = data.decode()
         except UnicodeDecodeError:
-            findings.append((name, 0, "binary_file"))
+            if rule := binary_finding(name, data):
+                findings.append((name, 0, rule))
             continue
         for number, line in enumerate(text.splitlines(), 1):
             for value in ALLOWED_VALUES:

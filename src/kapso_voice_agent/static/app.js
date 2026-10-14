@@ -4,6 +4,9 @@
 const $ = selector => document.querySelector(selector);
 const STORAGE = 'consoleAccessKey';
 const clock = new Intl.DateTimeFormat(undefined, {hour: 'numeric', minute: '2-digit'});
+const plural = new Intl.PluralRules('en');
+const KEY_HELP = 'Copy it again with uv run voice-agent console-key, then paste it here.';
+const UNREACHABLE = 'Unable to reach the server. The console tries again every 2 seconds.';
 let key = sessionStorage.getItem(STORAGE) || '';
 let peer, microphone, browserRef, outboundRef, allowedRecipient, state, poller, timer, callStartedAt;
 let attempt = 0;  // bumped by sign-out, so a call that is still starting knows to hang itself up
@@ -27,6 +30,32 @@ async function api(path, body, withKey = key) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) { throw new Error(data.detail || `The server answered with error ${response.status}.`); }
   return data;
+}
+
+// Text with inline commands. Parts are strings or {code: '...'}; nothing is parsed as HTML.
+function fill(element, ...parts) {
+  element.replaceChildren(...parts.map(part => {
+    if (typeof part === 'string') { return part; }
+    const code = document.createElement('code');
+    code.textContent = part.code;
+    return code;
+  }));
+}
+
+const ICONS = {
+  ok: '<path d="M20 6 9 17l-5-5"/>',
+  todo: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5m0 3v.01"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
+  live: '<circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="9"/>',
+};
+
+function icon(kind, className = 'icon') {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('class', `${className} ${kind}`);
+  svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = ICONS[kind];
+  return svg;
 }
 
 // Sign in and out --------------------------------------------------------------------------
@@ -60,8 +89,8 @@ async function signIn(candidate, restoring = false) {
     forgetKey();
     showSignedIn(false);
     showKeyError(error instanceof Unauthorized
-      ? (restoring ? 'Your saved key no longer works. The server may have a new key. Copy it again with uv run voice-agent console-key.'
-        : 'This key does not match this server. Copy it again with uv run voice-agent console-key, then paste it here.')
+      ? (restoring ? `The saved key no longer works. The server may have a new key. ${KEY_HELP}`
+        : `This key does not match this server. ${KEY_HELP}`)
       : error.message);
     $('#key').focus();
     return;
@@ -75,7 +104,7 @@ async function signIn(candidate, restoring = false) {
   showSignedIn(true);
   render();
   poller = setInterval(refresh, 2000);
-  if (!restoring) { $('#status-title').focus(); }
+  if (!restoring) { $('#readiness-title').focus(); }
 }
 
 $('#sign-in-form').onsubmit = event => {
@@ -107,125 +136,210 @@ async function signOut(message = '') {
 
 $('#sign-out').onclick = () => signOut();
 
-// Setup status ----------------------------------------------------------------------------
-
-function voiceName(voice) {
-  if (voice.offline_fake_agent) { return `Offline fake agent (${voice.provider === 'grok' ? 'Grok' : 'ElevenLabs'} protocol)`; }
-  return voice.provider === 'grok' ? 'Grok Voice' : 'ElevenLabs Agents';
-}
+// What the server can do, and the one thing to do next ------------------------------------
 
 function vendor(voice) {
   return voice.provider === 'grok' ? 'xAI' : 'ElevenLabs';
 }
 
+function voiceName(voice) {
+  if (voice.offline_fake_agent) { return `Offline stand-in (${voice.provider === 'grok' ? 'Grok' : 'ElevenLabs'} protocol)`; }
+  return voice.provider === 'grok' ? `Grok Voice · ${voice.model} · voice ${voice.voice}` : 'ElevenLabs Agents';
+}
+
 const PROBLEMS = {
-  auth: voice => `${vendor(voice)} rejected the API key. Check ${voice.provider === 'grok' ? 'XAI_API_KEY' : 'ELEVENLABS_API_KEY'} in the server's .env, then restart the server.`,
-  rate_limited: voice => `${vendor(voice)} is limiting requests for this key. Wait a minute, then start the call again.`,
+  auth: voice => `${vendor(voice)} rejected the API key. Check ${voice.provider === 'grok' ? 'XAI_API_KEY' : 'ELEVENLABS_API_KEY'} in the .env file of the server, then restart the server.`,
+  rate_limited: voice => `${vendor(voice)} is limiting requests for this key. Wait one minute, then start the call again.`,
   not_found: voice => (voice.provider === 'grok'
-    ? `xAI could not open ${voice.model}. Check grok.model in agent/agent.toml and that your xAI team can use Grok Voice.`
-    : 'ElevenLabs could not find the agent. Check ELEVENLABS_AGENT_ID, or run uv run voice-agent agent apply.'),
-  unreachable: voice => `The server could not reach ${vendor(voice)}. Check its internet connection, then try again.`,
-  failed: voice => `${vendor(voice)} ended the session before it was ready. Open the event log below for details, then try again.`,
+    ? `xAI did not open ${voice.model}. Check grok.model in agent/agent.toml, and that your xAI team can use Grok Voice.`
+    : 'ElevenLabs did not find the agent. Check ELEVENLABS_AGENT_ID, or run uv run voice-agent agent apply.'),
+  unreachable: voice => `Unable to reach ${vendor(voice)} from the server. Check its internet connection, then try again.`,
+  failed: voice => `${vendor(voice)} ended the session before it was ready. Open the technical event log for details, then try again.`,
 };
 
-const ICONS = {
-  ok: '<path d="M20 6 9 17l-5-5"/>',
-  todo: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5m0 3v.01"/>',
-  info: '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
-};
+function connectedWhatsAppCall() {
+  return state.recent_calls.find(call => call.kind !== 'browser' && call.connected_at);
+}
 
-function checkItem(kind, name, value, detail) {
-  const item = document.createElement('li');
-  item.className = `check ${kind}`;
-  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  icon.setAttribute('viewBox', '0 0 24 24');
-  icon.setAttribute('class', 'icon check-icon');
-  icon.setAttribute('aria-hidden', 'true');
-  icon.innerHTML = ICONS[kind];
-  const text = document.createElement('div');
-  const title = document.createElement('p');
-  title.className = 'check-title';
-  const label = document.createElement('span');
-  label.className = 'check-name';
-  label.textContent = name;
-  const status = document.createElement('span');
-  status.className = 'check-state';
-  status.textContent = value;
-  title.append(label, status);
-  text.append(title);
+// The single next action. Blocking steps first, then the path to a real phone call.
+function nextStep() {
+  const voice = state.voice;
+  const name = vendor(voice);
+  if (voice.setup_step === 'api_key') {
+    return {blocking: true, parts: [`Add your ${name} API key. Run `, {code: 'uv run voice-agent setup'}, ', then restart the server.']};
+  }
+  if (voice.setup_step === 'create_agent') {
+    return {blocking: true, parts: ['Create the ElevenLabs agent. Run ', {code: 'uv run voice-agent agent apply --yes --save-agent-id'},
+      ', then restart the server.']};
+  }
+  if (!state.calendar) {
+    return {blocking: true, parts: ['Choose a calendar. Run ', {code: 'uv run voice-agent setup'},
+      ' and pick Cal.com, or the local calendar for a first test.']};
+  }
+  if (!state.agent_ready) {
+    return {blocking: true, parts: ['Create the local secrets. Run ', {code: 'uv run voice-agent setup'}, ', then restart the server.']};
+  }
+  if (state.recording.next_greeting_says_recorded === null && state.recording.last_check_error) {
+    return {blocking: true, parts: ['Unable to read the recording setting of the ElevenLabs agent. Check ',
+      {code: 'ELEVENLABS_API_KEY'}, ' and ', {code: 'ELEVENLABS_AGENT_ID'}, ', then restart the server.']};
+  }
+  if (state.whatsapp_missing.length) {
+    return {blocking: false, parts: ['Next: after a good test call, host this server and connect your WhatsApp number. See ',
+      {code: 'docs/deploy.md'}, '.']};
+  }
+  const call = connectedWhatsAppCall();
+  if (!call) {
+    return {blocking: false, parts: ['Next: call your WhatsApp number from a phone. Only a phone call proves the full path.']};
+  }
+  return {blocking: false, parts: [`A WhatsApp call connected at ${clock.format(new Date(call.connected_at))}.`]};
+}
+
+function renderReadiness() {
+  const step = nextStep();
+  const onCall = Boolean(peer);
+  const kind = onCall ? 'live' : (step.blocking ? 'todo' : 'ok');
+  $('#readiness-icon').setAttribute('class', `icon readiness-icon ${kind}`);
+  $('#readiness-icon').innerHTML = ICONS[kind];
+  $('#readiness-title').textContent = onCall ? 'On a test call'
+    : (step.blocking ? 'Finish setup to start a test call' : 'Ready for a test call');
+  fill($('#next-step'), ...step.parts);
+
+  const voice = state.voice;
+  if (voice.offline_fake_agent) {
+    $('#call-cost').textContent = 'Offline stand-in: you hear a tone, then your own voice. No AI and no cost.';
+  } else {
+    const calendar = state.calendar === 'calcom' ? 'real bookings in your Cal.com calendar' : 'the local development calendar';
+    $('#call-cost').textContent = `Starts a real ${voice.provider === 'grok' ? 'Grok Voice session' : 'ElevenLabs conversation'}`
+      + ` that ${vendor(voice)} bills per minute. It uses ${calendar}. It does not test WhatsApp audio.`;
+  }
+  const problem = voice.problem;
+  $('#provider-problem').hidden = !problem;
+  $('#provider-problem').textContent = problem
+    ? `Last attempt, ${clock.format(new Date(problem.at))}: ${(PROBLEMS[problem.problem] || PROBLEMS.failed)(voice)}` : '';
+  if (!peer) { $('#start').disabled = step.blocking || state.busy; }
+}
+
+// ['A', 'B', 'C'] as `A`, `B` and `C`.
+function codeList(names) {
+  return names.flatMap((name, index) => [index === 0 ? '' : (index === names.length - 1 ? ' and ' : ', '), {code: name}])
+    .filter(part => part !== '');
+}
+
+function setupRow(name, kind, value, detail) {
+  const term = document.createElement('dt');
+  term.textContent = name;
+  const description = document.createElement('dd');
+  const line = document.createElement('p');
+  line.className = 'setup-value';
+  line.append(icon(kind, 'icon status-icon'), value);
+  description.append(line);
   if (detail) {
     const note = document.createElement('p');
-    note.className = 'check-detail';
-    note.textContent = detail;
-    text.append(note);
+    note.className = 'setup-detail';
+    fill(note, ...(Array.isArray(detail) ? detail : [detail]));
+    description.append(note);
   }
-  item.append(icon, text);
+  const row = document.createElement('div');
+  row.className = 'setup-row';
+  row.append(term, description);
+  return row;
+}
+
+function renderSetup() {
+  const voice = state.voice;
+  const rows = [];
+  const voiceDetail = {api_key: `Needs the ${vendor(voice)} API key.`, create_agent: 'Needs the ElevenLabs agent.'}[voice.setup_step]
+    || (voice.offline_fake_agent ? 'A tone and an echo for development. Not a conversation.' : '');
+  rows.push(setupRow('Voice provider', voice.setup_step ? 'todo' : 'ok', voiceName(voice), voiceDetail));
+
+  if (state.calendar === 'calcom') {
+    rows.push(setupRow('Calendar', 'ok', 'Cal.com', 'Test bookings are real bookings.'));
+  } else if (state.calendar === 'local') {
+    rows.push(setupRow('Calendar', 'info', 'Local development calendar', 'Bookings stay on this server. Use Cal.com for real callers.'));
+  } else {
+    rows.push(setupRow('Calendar', 'todo', 'Not chosen', ['Add ', {code: 'CAL_API_KEY'}, ', or set ', {code: 'CALENDAR=local'}, ' for a first test.']));
+  }
+
+  const recorded = state.recording.next_greeting_says_recorded;
+  rows.push(recorded === null
+    ? setupRow('Recording notice', 'info', 'Read at the start of each call', 'No call starts until the recording setting of the provider is known.')
+    : setupRow('Recording notice', recorded ? 'ok' : 'info', recorded ? 'Callers hear “This call is recorded.”' : 'No recording notice',
+      recorded && voice.provider === 'grok' && !voice.offline_fake_agent ? 'xAI keeps API traffic for 30 days.' : ''));
+
+  rows.push(setupRow('Call audio', 'info', {cloudflare_turn: 'Cloudflare TURN relay', ice_servers: 'Your ICE servers',
+    direct: 'Direct, no TURN relay'}[state.call_audio],
+  state.call_audio === 'direct' ? 'Works on this computer and on a server with open UDP. Railway needs a TURN relay.' : ''));
+
+  if (state.whatsapp_missing.length) {
+    rows.push(setupRow('WhatsApp', 'info', 'Not connected', ['Needs ', ...codeList(state.whatsapp_missing), '.']));
+  } else {
+    const call = connectedWhatsAppCall();
+    rows.push(setupRow('WhatsApp', call ? 'ok' : 'info', 'Configured through Kapso', call
+      ? `A call connected at ${clock.format(new Date(call.connected_at))}.`
+      : 'Not proven yet. Call the number from a phone.'));
+  }
+
+  rows.push(state.outbound_enabled
+    ? setupRow('Outbound calls', 'info', 'On', 'The form below rings real phones.')
+    : setupRow('Outbound calls', 'info', 'Off', ['Set ', {code: 'ENABLE_OUTBOUND=1'}, ' to call people from this console.']));
+  $('#setup').replaceChildren(...rows);
+}
+
+// Recent calls: built by the server from its in-memory event log ----------------------------
+
+const KINDS = {browser: 'Browser test', whatsapp_inbound: 'WhatsApp, incoming', whatsapp_outbound: 'WhatsApp, outgoing'};
+
+function duration(from, to) {
+  const seconds = Math.max(0, Math.floor((to - from) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function recentItem(call) {
+  let kind, status;
+  if (call.active) {
+    kind = 'live';
+    status = call.connected_at ? `In progress, ${duration(new Date(call.connected_at), Date.now())}` : 'Connecting';
+  } else if (call.problem) {
+    kind = 'todo';
+    status = 'Problem. See the event log.';
+  } else if (call.connected_at) {
+    kind = 'ok';
+    status = `Ended after ${duration(new Date(call.connected_at), new Date(call.last_at))}`;
+  } else {
+    kind = 'info';
+    status = 'Audio did not connect';
+  }
+  const tools = !call.tools ? 'No tool calls' : (plural.select(call.tools) === 'one' ? '1 tool call' : `${call.tools} tool calls`);
+  const media = {direct: 'direct audio', relay: 'audio through TURN'}[call.media];
+
+  const item = document.createElement('li');
+  item.className = 'recent-item';
+  const time = document.createElement('time');
+  time.className = 'recent-time';
+  time.dateTime = call.started_at;
+  time.textContent = clock.format(new Date(call.started_at));
+  const what = document.createElement('div');
+  const title = document.createElement('p');
+  title.className = 'recent-kind';
+  title.textContent = KINDS[call.kind];
+  const detail = document.createElement('p');
+  detail.className = 'recent-detail';
+  detail.textContent = media ? `${tools} · ${media}` : tools;
+  what.append(title, detail);
+  const result = document.createElement('p');
+  result.className = 'recent-status';
+  result.append(icon(kind, 'icon status-icon'), status);
+  item.append(time, what, result);
   return item;
 }
 
-function renderChecklist() {
-  const voice = state.voice;
-  // Setting names only; the "(or DEV_AGENT_WS_URL)" development alternative is for the docs, not this card.
-  const voiceMissing = state.agent_missing.filter(name => /^(XAI_|ELEVENLABS_)/.test(name)).map(name => name.replace(/ \(.*\)$/, ''));
-  const items = [];
-  const voiceValue = voice.provider === 'grok' && !voice.offline_fake_agent
-    ? `Grok Voice · ${voice.model} · voice ${voice.voice}` : voiceName(voice);
-  items.push(voiceMissing.length
-    ? checkItem('todo', 'Voice provider', `${voiceValue}: not set up`, `Add ${voiceMissing.join(' and ')}. Run uv run voice-agent setup, then restart the server.`)
-    : checkItem('ok', 'Voice provider', voiceValue,
-      voice.offline_fake_agent ? 'Development stand-in: a tone and an echo, not a conversation.' : ''));
-  if (state.calendar === 'calcom') {
-    items.push(checkItem('ok', 'Calendar', 'Cal.com', 'Test bookings are real bookings in your calendar.'));
-  } else if (state.calendar === 'local') {
-    items.push(checkItem('ok', 'Calendar', 'Local development calendar', 'Bookings stay on this server. Use Cal.com for real callers.'));
-  } else {
-    items.push(checkItem('todo', 'Calendar', 'Not set up', 'Add CAL_API_KEY, or set CALENDAR=local to test without a calendar.'));
-  }
-  const missingKey = state.agent_missing.find(name => name.startsWith('CALLER_KEY_SECRET'));
-  if (missingKey) {
-    items.push(checkItem('todo', 'Caller key', 'Not set up', 'Add CALLER_KEY_SECRET. uv run voice-agent setup creates one.'));
-  }
-  const recorded = state.recording.next_greeting_says_recorded;
-  items.push(recorded === null
-    ? checkItem('todo', 'Recording notice', 'Not known yet', 'No call starts until the provider’s recording setting can be read.')
-    : checkItem(recorded ? 'ok' : 'info', 'Recording notice', recorded ? 'Callers hear “This call is recorded.”' : 'No recording notice',
-      recorded && voice.provider === 'grok' && !voice.offline_fake_agent ? 'xAI keeps API traffic for 30 days.' : ''));
-  items.push(state.calls_ready
-    ? checkItem('ok', 'WhatsApp', 'Connected through Kapso', '')
-    : checkItem('info', 'WhatsApp', 'Not connected', 'Browser test calls work without it. See docs/deploy.md to connect a number.'));
-  $('#checklist').replaceChildren(...items);
-  $('#status-summary').textContent = state.agent_ready ? 'Ready for test calls.' : 'Finish the items marked below to start a test call.';
-
-  const notice = $('#provider-problem');
-  const problem = voice.problem;
-  notice.hidden = !problem;
-  notice.textContent = problem
-    ? `Last attempt, ${clock.format(new Date(problem.at))}: ${(PROBLEMS[problem.problem] || PROBLEMS.failed)(voice)}` : '';
-}
-
-function renderBrowserCard() {
-  const voice = state.voice;
-  const calendar = state.calendar === 'calcom' ? 'your Cal.com calendar' : 'the local development calendar';
-  if (voice.offline_fake_agent) {
-    $('#browser-cost').textContent = 'Offline. No AI and no provider cost.';
-    $('#browser-proves').textContent = 'You hear a short tone, then your own voice. This checks your microphone, the audio path and one calendar lookup.';
-  } else {
-    $('#browser-cost').textContent = voice.provider === 'grok'
-      ? `Starts a real Grok Voice session (${voice.model}). xAI bills it per minute.`
-      : 'Starts a real ElevenLabs Agents conversation. ElevenLabs bills it per minute.';
-    $('#browser-proves').textContent = `Talk to the agent as a caller would: its voice, its answers and bookings in ${calendar}. It does not test the WhatsApp audio path.`;
-  }
-  if (!peer) {
-    $('#start').disabled = !state.agent_ready || state.busy;
-    if (!state.agent_ready && !$('#call-status').textContent) {
-      $('#call-status').textContent = 'Finish the setup above to start a test call.';
-    }
-  }
+function renderRecent() {
+  $('#recent').replaceChildren(...state.recent_calls.map(recentItem));
+  $('#recent-empty').hidden = state.recent_calls.length > 0;
 }
 
 function renderOutbound() {
-  $('#outbound-off').hidden = state.outbound_enabled;
-  $('#outbound-form').hidden = !state.outbound_enabled;
+  $('#outbound').hidden = !state.outbound_enabled;
   if (outboundRef && !state.calls.some(call => call.ref === outboundRef)) {
     outboundRef = undefined;
     $('#outbound-stop').disabled = true;
@@ -234,10 +348,10 @@ function renderOutbound() {
 }
 
 function render() {
-  renderChecklist();
-  renderBrowserCard();
+  renderReadiness();
+  renderSetup();
+  renderRecent();
   renderOutbound();
-  $('#footer-provider').textContent = voiceName(state.voice);
   $('#events').textContent = state.events.map(e => `${e.at.slice(11, 23)} ${e.event}${e.ref ? ' ' + e.ref : ''}${e.media ? ' media=' + e.media : ''}`).join('\n');
 }
 
@@ -247,20 +361,29 @@ async function refresh() {
     state = await api('/state');
   } catch (error) {
     if (error instanceof Unauthorized) {
-      await signOut('Your key no longer works. The server may have a new key. Copy it again with uv run voice-agent console-key.');
+      await signOut(`The key no longer works. The server may have a new key. ${KEY_HELP}`);
     } else {
-      $('#status-summary').textContent = 'Unable to reach the server. Retrying every 2 seconds.';
+      $('#call-status').textContent = UNREACHABLE;
     }
     return;
   }
+  if ($('#call-status').textContent === UNREACHABLE) { $('#call-status').textContent = ''; }
   render();
 }
 
 // Browser test call -----------------------------------------------------------------------
 
-function elapsed() {
-  const seconds = Math.floor((Date.now() - callStartedAt) / 1000);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+function showCallControls(onCall) {
+  const hadFocus = document.activeElement;
+  $('#start').hidden = onCall;
+  $('#mute').hidden = $('#stop').hidden = !onCall;
+  if (onCall && hadFocus === $('#start')) { $('#stop').focus(); }
+  if (!onCall && [$('#stop'), $('#mute')].includes(hadFocus)) { $('#start').focus(); }
+}
+
+function setMuted(muted) {
+  $('#mute').setAttribute('aria-pressed', String(muted));
+  if (microphone) { microphone.getAudioTracks().forEach(track => { track.enabled = !muted; }); }
 }
 
 function release() {
@@ -270,25 +393,26 @@ function release() {
   clearInterval(timer);
   timer = undefined;
   $('#timer').textContent = '';
-  $('#stop').disabled = true;
+  setMuted(false);
+  showCallControls(false);
 }
 
 function callEnded(message) {
-  const duration = callStartedAt ? elapsed() : '';
+  const length = callStartedAt ? duration(callStartedAt, Date.now()) : '';
   callStartedAt = undefined;
   release();
   browserRef = undefined;
-  $('#call-status').textContent = message || (duration ? `Call ended after ${duration}.` : 'Call ended.');
-  if (state) { $('#start').disabled = !state.agent_ready; }
+  $('#call-status').textContent = message || (length ? `Call ended after ${length}.` : 'Call ended.');
+  if (state) { renderReadiness(); }
   refresh();
 }
 
 function microphoneMessage(error) {
   if (error.name === 'NotAllowedError') {
-    return 'Microphone access is blocked. Allow it for this site in your browser settings, then start the call again.';
+    return 'The browser blocks the microphone. Allow it for this site in the browser settings, then start the call again.';
   }
   if (error.name === 'NotFoundError') { return 'No microphone found. Connect one, then start the call again.'; }
-  return 'Unable to use the microphone. Check your browser settings, then try again.';
+  return 'Unable to use the microphone. Check the browser settings, then try again.';
 }
 
 $('#start').onclick = async () => {
@@ -312,17 +436,18 @@ $('#start').onclick = async () => {
       if (peer.connectionState === 'connected' && !callStartedAt) {
         callStartedAt = Date.now();
         $('#call-status').textContent = 'On a call. Say hello.';
-        timer = setInterval(() => { $('#timer').textContent = elapsed(); }, 1000);
+        timer = setInterval(() => { $('#timer').textContent = duration(callStartedAt, Date.now()); }, 1000);
+        renderReadiness();
       } else if (['failed', 'closed', 'disconnected'].includes(peer.connectionState)) {
         callEnded(peer.connectionState === 'failed' && !callStartedAt
-          ? 'The audio could not connect. If the server is remote, it needs a TURN relay (docs/deploy.md).' : '');
+          ? 'The audio could not connect. A remote server needs a TURN relay. See docs/deploy.md.' : '');
       }
     };
     microphone.getTracks().forEach(track => peer.addTrack(track, microphone));
     await peer.setLocalDescription(await peer.createOffer());
     await new Promise((resolve, reject) => {
       if (peer.iceGatheringState === 'complete') { resolve(); return; }
-      const wait = setTimeout(() => reject(new Error('Your browser took too long to prepare the audio connection. Try again.')), 10000);
+      const wait = setTimeout(() => reject(new Error('The browser took too long to prepare the audio connection. Try again.')), 10000);
       peer.onicegatheringstatechange = () => {
         if (peer && peer.iceGatheringState === 'complete') { clearTimeout(wait); resolve(); }
       };
@@ -335,13 +460,14 @@ $('#start').onclick = async () => {
     }
     browserRef = answer.ref;
     await peer.setRemoteDescription({type: answer.type, sdp: answer.sdp});
-    $('#stop').disabled = false;
+    showCallControls(true);
+    renderReadiness();
   } catch (error) {
     if (attempt !== started) { return; }  // sign-out already released the call
     release();
     browserRef = undefined;
     $('#start').disabled = false;
-    if (error instanceof Unauthorized) { await signOut('Your key no longer works. Sign in again.'); return; }
+    if (error instanceof Unauthorized) { await signOut(`The key no longer works. ${KEY_HELP}`); return; }
     $('#call-status').textContent = error.message;
   }
 };
@@ -354,6 +480,11 @@ async function hangUp() {
 }
 
 $('#stop').onclick = hangUp;
+$('#mute').onclick = () => {
+  const muted = $('#mute').getAttribute('aria-pressed') !== 'true';
+  setMuted(muted);
+  $('#call-status').textContent = muted ? 'Microphone muted. The agent cannot hear you.' : 'Microphone on.';
+};
 
 // Outbound WhatsApp call ------------------------------------------------------------------
 

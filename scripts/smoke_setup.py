@@ -7,7 +7,7 @@ PATH, a temporary HOME and DATA_DIR, and the env files written by the commands u
 1. README step 1 before the provider keys: `voice-agent init` writes a private .env, `check`
    reports only the ElevenLabs agent and the calendar as missing, and `serve` prints the console
    URL (never a secret) and refuses a browser call with a clear reason.
-2. docs/development.md: `dev init-env` + the offline fake agent + `serve` with the local
+2. docs/testing.md level 1: `dev init-env` + the offline fake agent + `serve` with the local
    development calendar, then a browser-path call over real HTTP/WebRTC that hears the fake
    agent's tone and runs one tool, hangup, and private data permissions.
 

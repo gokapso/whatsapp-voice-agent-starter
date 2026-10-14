@@ -16,5 +16,5 @@ COPY agent /starter/agent
 RUN uv pip install --python /app/.venv/bin/python --no-deps /starter
 
 COPY examples/pipecat-cloud/bot.py /app/bot.py
-# Sessions are short-lived: DATA_DIR is removed when a session ends (see README, "What is lost").
+# Sessions are short-lived: DATA_DIR is removed when a session ends (see README, "Limits").
 ENV AGENT_CONFIG_PATH=/starter/agent/agent.toml DATA_DIR=/tmp/kapso-voice-agent PYTHONUNBUFFERED=1

@@ -3,8 +3,6 @@
 Public (expose through your HTTPS ingress):
   GET  /healthz              -> {"ok": true}; no configuration details
   POST /webhooks/whatsapp    -> Kapso-signed Meta Calling webhook (raw-body HMAC, 1 MB cap)
-  POST /webhooks/xai-sip     -> xAI Direct SIP incoming call (Standard Webhooks signature); 404 unless
-                                XAI_SIP_WEBHOOK_SECRET is set (xai_sip.py)
 
 Operator (bearer OPERATOR_TOKEN; returns 404 when the token is unset):
   GET  /operator/                         console page (contains no secrets)
@@ -37,7 +35,6 @@ from .outbound import OutboundError
 from .private import private_dir, prune_local_artifacts
 from .recording import RecordingUnknown
 from .turn import TurnUnavailable
-from .xai_sip import SipCalls, incoming_call, verify_standard_webhook
 
 STATIC = Path(__file__).parent / "static"
 MAX_WEBHOOK_BYTES = 1_000_000
@@ -122,7 +119,6 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     manager = CallManager(settings, spec, store, log, session_factory=session_factory,
                           connection_factory=connection_factory, kapso_factory=kapso_factory,
                           recording_reader=recording_reader)
-    sip_calls = SipCalls(settings, spec, store, log)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -135,11 +131,9 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             pruner.cancel()
             await asyncio.gather(pruner, return_exceptions=True)
             await manager.shutdown()
-            await sip_calls.shutdown()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager, app.state.log, app.state.settings = manager, log, settings
-    app.state.sip_calls = sip_calls
     if settings.allowed_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
@@ -167,23 +161,6 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             # Kapso will retry; the call keeps ringing until then or until the caller gives up.
             raise HTTPException(503, "Server is not configured to answer calls") from None
         return counts
-
-    @app.post("/webhooks/xai-sip")
-    async def xai_sip_webhook(request: Request):
-        if not settings.xai_sip_webhook_secret:
-            raise HTTPException(404)
-        raw = await read_capped(request)
-        if not verify_standard_webhook(settings.xai_sip_webhook_secret, request.headers, raw):
-            raise HTTPException(401, "Invalid signature")
-        try:
-            call = incoming_call(json.loads(raw))
-        except ValueError:
-            raise HTTPException(400, "Body is not JSON") from None
-        if call is None:
-            return {"ignored": True}
-        if not settings.xai_sip_ready:
-            raise HTTPException(503, "Server is not configured to control xAI SIP calls")
-        return {"call": sip_calls.start(*call, manager.caller_key)}
 
     def operator(request: Request):
         if not settings.operator_enabled:
@@ -216,20 +193,37 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     def voice_status():
         """Which provider a browser call would talk to. Names only; never a key."""
         grok = settings.voice_provider == "grok"
+        setup_step = None  # what the console asks for next: "api_key", then "create_agent" (ElevenLabs)
+        if not settings.dev_agent_ws_url:
+            if not (settings.xai_api_key if grok else settings.elevenlabs_api_key):
+                setup_step = "api_key"
+            elif not grok and not settings.elevenlabs_agent_id:
+                setup_step = "create_agent"
         return {"provider": settings.voice_provider, "label": "Grok Voice" if grok else "ElevenLabs Agents",
                 "model": spec.grok["model"] if grok else None, "voice": spec.grok["voice"] if grok else None,
-                "offline_fake_agent": bool(settings.dev_agent_ws_url), "problem": log.provider_problem}
+                "offline_fake_agent": bool(settings.dev_agent_ws_url), "setup_step": setup_step,
+                "problem": log.provider_problem}
+
+    def call_audio():
+        if settings.turn_provider == "cloudflare":
+            return "cloudflare_turn"
+        return "ice_servers" if json.loads(settings.ice_servers_json) else "direct"
 
     @api.get("/state")
     async def state():
+        calls = manager.snapshot()
+        whatsapp_missing = [name for name, value in (("KAPSO_API_KEY", settings.kapso_api_key),
+                                                     ("WHATSAPP_PHONE_NUMBER_ID", settings.phone_number_id),
+                                                     ("WHATSAPP_WEBHOOK_SECRET", settings.webhook_secret)) if not value]
         return {"calls_ready": settings.calls_ready, "agent_ready": settings.agent_ready,
                 "agent_missing": settings.agent_missing(),  # setting names only, never values
                 "voice": voice_status(), "calendar": settings.calendar or None,
+                "whatsapp_missing": whatsapp_missing, "call_audio": call_audio(),
                 "outbound_enabled": settings.enable_outbound, "local_capture": settings.local_capture,
                 "recording": manager.recording.status(),
                 "max_concurrent_calls": settings.max_concurrent_calls, "busy": manager.busy(),
-                "calls": manager.snapshot(), "events": list(log.events),
-                "native_artifact_events": list(manager.artifacts)}
+                "calls": calls, "recent_calls": log.recent_calls({call["ref"] for call in calls}),
+                "events": list(log.events), "native_artifact_events": list(manager.artifacts)}
 
     @api.post("/browser-call")
     async def browser_call(offer: Offer):

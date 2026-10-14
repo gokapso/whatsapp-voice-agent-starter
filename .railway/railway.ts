@@ -1,6 +1,6 @@
 // Railway project for this starter, as Infrastructure as Code (https://docs.railway.com/infrastructure-as-code).
 // `railway config plan` previews it and `railway config apply` creates or updates the linked project.
-// Full guide, including the one-click template made from this project: docs/deploy-railway.md.
+// Full guide: docs/deploy.md.
 //
 // One service built from the repository's Dockerfile, one 1 GB volume for DATA_DIR, one replica
 // (call state is in memory and a volume cannot be shared by replicas). Railway has no inbound

@@ -46,8 +46,6 @@ class Settings:
     elevenlabs_agent_id: str = ""
     voice_provider: str = "elevenlabs"
     xai_api_key: str = ""
-    # Standard Webhooks secret (whsec_...) from POST /v2/phone-numbers; turns on /webhooks/xai-sip.
-    xai_sip_webhook_secret: str = ""
     cal_api_key: str = ""
     # "calcom" (real bookings), "local" (offline development calendar) or "" (none: no calls start).
     calendar: str = ""
@@ -99,11 +97,6 @@ class Settings:
         if not self.calendar:
             missing.append("CAL_API_KEY (or CALENDAR=local for offline development)")
         return missing
-
-    @property
-    def xai_sip_ready(self):
-        """xAI Direct SIP calls can be controlled: the xAI key, a caller key secret and a calendar."""
-        return bool(self.xai_api_key and (self.caller_key_secret or self.webhook_secret) and self.calendar)
 
     @property
     def operator_enabled(self):
@@ -174,7 +167,6 @@ def load_settings(environ=None, env_file=None):
         elevenlabs_agent_id=get("ELEVENLABS_AGENT_ID"),
         voice_provider=voice_provider,
         xai_api_key=get("XAI_API_KEY"),
-        xai_sip_webhook_secret=get("XAI_SIP_WEBHOOK_SECRET"),
         cal_api_key=cal_api_key,
         calendar=calendar,
         operator_token=operator_token,
@@ -200,8 +192,6 @@ def load_settings(environ=None, env_file=None):
         # The Host check compares names only (Starlette drops the port), so "host:8080" never matches.
         raise ConfigError("ALLOWED_HOSTS takes host names without ports, e.g. voice.example.com,127.0.0.1 (got "
                           + ", ".join(with_port) + ")")
-    if settings.xai_sip_webhook_secret and not settings.xai_sip_webhook_secret.startswith("whsec_"):
-        raise ConfigError("XAI_SIP_WEBHOOK_SECRET is the whsec_... signing secret xAI returns when you register the number")
     if settings.meta_graph_version[:1] != "v" or not settings.meta_graph_version[1:].replace(".", "").isdigit():
         raise ConfigError("META_GRAPH_VERSION must look like v24.0")
     if settings.phone_number_id and not settings.phone_number_id.isdigit():

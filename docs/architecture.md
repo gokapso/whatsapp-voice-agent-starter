@@ -20,10 +20,8 @@ WhatsApp caller ──(Meta WebRTC audio, UDP)───────────�
 - HTTPS carries webhooks, SDP and call actions. Audio uses its own WebRTC path (ICE, maybe TURN).
 - The voice provider owns the conversation: ElevenLabs Agents by default, or xAI Grok Voice with
   `VOICE_PROVIDER=grok` (`grok_bridge.py`). Pipecat is only the audio transport and pipeline runner.
-- This bridge and call handling carried one real English outbound WhatsApp call to a handset
-  (2026-10-07), with the earlier local booking tools; the Cal.com tools have not been on a real
-  call yet. Inbound calls use the same bridge but were not part of that call. It does not use
-  Daily rooms. The same call code can also run in a Pipecat Cloud session (below).
+- One real outbound WhatsApp call reached a handset with this bridge (2026-10-07, earlier booking
+  tools). The same call code can also run in a Pipecat Cloud session (below).
 
 ## Inbound call sequence
 
@@ -48,7 +46,7 @@ WhatsApp caller ──(Meta WebRTC audio, UDP)───────────�
 The console page sends its WebRTC offer to `POST /operator/api/browser-call` with the operator
 token. The server checks the recording state, answers the offer, and starts the same agent
 session as a WhatsApp call, with a random per-call caller identity and the inbound greeting.
-There is no Kapso step. This is the README's step 1 and `docs/testing.md` level 2.
+There is no Kapso step.
 
 ## Outbound call sequence (operator only, `ENABLE_OUTBOUND=1`)
 
@@ -64,26 +62,17 @@ number, user-initiated, claimed, not over), takes the caller identity from Kapso
 passes that one `connect` to a `CallManager`. From there the inbound sequence above applies. There
 is no webhook route, console or persistent `DATA_DIR`.
 
-## Provider SIP (`sip.py`, `xai_sip.py`)
-
-`voice-agent sip status` reads who answers the number's calls; `voice-agent sip plan` prints the
-SIP requests without sending them. Meta's SIP mode replaces the Calling API for that number.
-`xai_sip.py` is the control service for xAI Direct SIP: signed webhook in, one realtime session
-per `call_id` for instructions, greeting and tools, then hangup. xAI handles the audio. Both SIP
-paths are blocked for WhatsApp today (`docs/choose-where-calls-run.md`).
-
 ## Source map
 
 | File | Responsibility | Key tests |
 | --- | --- | --- |
-| `src/kapso_voice_agent/app.py` | HTTP routes: public webhook + health, operator API/console | `test_http_surface.py` |
+| `src/kapso_voice_agent/app.py` | HTTP routes: public webhook + health, operator API | `test_http_surface.py` |
+| `src/kapso_voice_agent/static/` | Operator console (plain HTML, CSS and JavaScript) | `test_http_surface.py`, a browser |
 | `src/kapso_voice_agent/calls.py` | Webhook event rules, inbound lifecycle, browser calls, capacity | `test_http_surface.py`, `test_call_flow.py` |
 | `src/kapso_voice_agent/outbound.py` | Outbound call state machine | `test_outbound.py` |
 | `src/kapso_voice_agent/bridge.py` | Pipecat pipeline + ElevenLabs WebSocket protocol; picks the bridge for `VOICE_PROVIDER` | `test_call_flow.py` |
 | `src/kapso_voice_agent/grok_bridge.py` | xAI Grok Voice realtime protocol in the same pipeline slot | `test_grok_bridge.py` |
 | `src/kapso_voice_agent/cloud.py` | Pipecat Cloud entry: Kapso launch body, Kapso lookup, then `CallManager` | `test_cloud_launch.py` |
-| `src/kapso_voice_agent/sip.py` | `sip status` (read-only) and `sip plan` (dry run) for provider SIP | via `voice-agent sip plan` |
-| `src/kapso_voice_agent/xai_sip.py` | xAI Direct SIP: Standard Webhooks check, session control, tools, hangup | `test_xai_sip.py` |
 | `src/kapso_voice_agent/turn.py` | Per-call ICE servers; Cloudflare TURN credentials | `test_turn.py` |
 | `src/kapso_voice_agent/setup_wizard.py` | `voice-agent setup`, `export-env`, `railway variables` | `test_setup_wizard.py` |
 | `src/kapso_voice_agent/kapso.py` | Kapso call-action client | via flow tests |
@@ -97,7 +86,7 @@ paths are blocked for WhatsApp today (`docs/choose-where-calls-run.md`).
 | `src/kapso_voice_agent/private.py` | 0700/0600 data directory and files, local retention pruning | `test_privacy_and_retention.py` |
 | `src/kapso_voice_agent/capture.py` | Optional local WAV + turn capture | `test_call_flow.py`, `test_setup_and_artifacts.py` |
 | `src/kapso_voice_agent/artifacts.py` | ElevenLabs MP3/JSON download | `test_setup_and_artifacts.py` |
-| `src/kapso_voice_agent/events.py` | Redacted in-memory event log, call references | all |
+| `src/kapso_voice_agent/events.py` | Redacted in-memory event log, call references, recent-call summary for the console | `test_http_surface.py` |
 | `src/kapso_voice_agent/config.py` | Environment settings and validation | `test_setup_and_artifacts.py` |
 | `src/kapso_voice_agent/fake_agent.py` | Offline agent stand-in for manual smoke tests | — |
 | `src/kapso_voice_agent/cli.py` | `voice-agent` commands | `test_setup_and_artifacts.py`, `test_privacy_and_retention.py` |
@@ -106,10 +95,158 @@ paths are blocked for WhatsApp today (`docs/choose-where-calls-run.md`).
 | `scripts/smoke_setup.py`, `smoke_local.py` | Development smoke checks with real processes, offline | run by hand |
 | `scripts/smoke_turn_relay.py` | Docker: image as Railway runs it, audio only through a coturn relay | run by hand |
 | `examples/pipecat-cloud/` | `bot.py`, Dockerfile on Pipecat's base image, `pcc-deploy.toml` | `test_cloud_launch.py`; container check in its README |
-| `examples/elevenlabs-sip/`, `examples/xai-sip/` | SIP setup guides; minimal no-tools ElevenLabs prompt | — |
-| `.railway/railway.ts`, `docker-entrypoint.sh`, `examples/vps/` | Railway project, root hand-off for volumes, VPS Compose + Caddy | `docs/deploy-railway.md` |
+| `.railway/railway.ts`, `docker-entrypoint.sh`, `examples/vps/` | Railway project, root hand-off for volumes, VPS Compose + Caddy | `scripts/smoke_turn_relay.py` |
 
 ## Contracts
 
-See `docs/contracts.md` for HTTP routes, webhook events handled, tool result shape and the
-ElevenLabs WebSocket messages used.
+Small, stable interfaces. Change them only together with their tests.
+
+### HTTP
+
+| Route | Auth | Request | Response |
+| --- | --- | --- | --- |
+| `GET /healthz` | none | — | `{"ok": true}` |
+| `POST /webhooks/whatsapp` | `X-Webhook-Signature` = hex HMAC-SHA256(raw body, `WHATSAPP_WEBHOOK_SECRET`) | Meta webhook JSON, ≤ 1 MB | `{"calls": n, "statuses": n, "ignored": n}`; 401 bad signature; 400 not JSON; 413 too large; 503 secret unset, or an inbound connect while the agent is not configured |
+| `GET /operator/`, `/operator/app.js`, `/operator/console.css` | none (page has no secrets); 404 if `OPERATOR_TOKEN` unset | — | console and assets |
+| `GET /operator/api/state` | `Authorization: Bearer <OPERATOR_TOKEN>` (the console access key) | — | readiness flags, `agent_missing` (setting names), `whatsapp_missing`, `call_audio` (`direct`\|`cloudflare_turn`\|`ice_servers`), `voice` `{provider: elevenlabs\|grok, label, model, voice, offline_fake_agent, setup_step: null\|api_key\|create_agent, problem: null\|{problem: auth\|rate_limited\|not_found\|unreachable\|failed, at}}`, `calendar` (`calcom`\|`local`\|null), `recording` `{provider_recording: on\|off\|unknown\|not_checked\|off (offline fake agent), local_capture, agent_toml_record_audio, next_greeting_says_recorded: true\|false\|null, last_check_error}`, active calls `{ref, direction, state}`, `recent_calls` (newest 6 in the event log: `{ref, kind, started_at, connected_at, last_at, media, tools, problem, active}`), events, native artifact notices |
+| `POST /operator/api/browser-call` | bearer | `{"sdp": "<offer>"}` | `{"ref", "type": "answer", "sdp"}`; 409 at capacity; 503 agent not ready (lists what is missing) or recording setting unknown |
+| `POST /operator/api/calls/{ref}/hangup` | bearer | — | `{"ended": true}`; 404 unknown ref |
+| `POST /operator/api/outbound/permission` | bearer + `ENABLE_OUTBOUND=1` | `{"recipient": "<E.164 digits or US.…>"}` | `{"permission_status", "can_call"}` |
+| `POST /operator/api/outbound/call` | bearer + `ENABLE_OUTBOUND=1` | `{"recipient"}` (extra fields rejected) | `{"ref", "state": "ringing" \| "terminated"}` |
+
+`ref` is `call-<16 hex>` (SHA-256 prefix of the Meta call ID) or `browser-<16 hex>`. Raw Meta call
+IDs never leave the process except in Kapso API calls.
+
+### Webhook events handled
+
+Only `entry[].changes[]` with `field == "calls"` and `value.metadata.phone_number_id ==
+WHATSAPP_PHONE_NUMBER_ID`. Everything else is counted as `ignored`. If this server shares a Meta
+webhook with messaging, route `messages` changes (including `interactive.call_permission_reply`)
+elsewhere first.
+
+| Event | Action |
+| --- | --- |
+| `calls[].event = connect`, `direction = USER_INITIATED`, `session.sdp_type = offer` | answer (or `reject` at capacity) |
+| `calls[].event = connect`, `direction = BUSINESS_INITIATED`, `session.sdp_type = answer` | apply to the pending outbound call |
+| `calls[].event = terminate` | mark terminal, cancel the call task, no action sent |
+| `statuses[].status = RINGING / ACCEPTED / REJECTED` | outbound progress; REJECTED is terminal |
+| `calls[].event = call_recording_available` / `call_transcription_available` / `call_transcript_available` | store a notice `{ref, event, media_present, mime_type}`; never starts a session |
+
+Deduplication is by Meta call ID (512 most recent kept in memory). `X-Idempotency-Key` is not
+used; per-call guards make repeated deliveries harmless in one process.
+
+### Pipecat Cloud launch body
+
+`cloud.answer_launch` takes the body that Kapso's dashboard Pipecat provider sends to
+`/v1/public/{agent}/start`: `{"kind": "whatsapp_connect", "webhook": <Meta calls webhook>,
+"whatsapp_token", "phone_number_id", "context"}`. It needs exactly one `USER_INITIATED` `connect`
+for `WHATSAPP_PHONE_NUMBER_ID`, and Kapso's saved call (`GET .../calls?call_id=...&limit=1`) with
+`session_started_at` set and no `ended_at`. The caller identity is Kapso's
+`business_scoped_user_id`, else `user_wa_id`; a body that disagrees is refused. Outcomes:
+`finished`, `unverified`, `not_started`, `no_inbound_connect`, `not_configured`,
+`ignored_other_phone_number`, `ignored_kind`. `whatsapp_token` and `context` are not used.
+
+### Tool results
+
+Every tool returns JSON with `ok`. Times come as an exact `slot` value (local ISO time with
+offset) plus a `when` phrase for the agent to say. Examples from the Cal.com calendar:
+
+```json
+{"ok": true, "service_id": "consultation", "service_name": "Consultation", "timezone": "America/Chicago", "needs_email": true, "slots": [{"slot": "2026-11-03T10:00:00-06:00", "when": "Tuesday, November 3 at 10 AM"}], "has_more": true}
+{"ok": true, "service_id": "consultation", "service_name": "Consultation", "timezone": "America/Chicago", "needs_email": true, "day": "2026-11-02", "day_spoken": "Monday, November 2", "slots": [], "has_more": false, "next_available": {"slot": "2026-11-03T10:00:00-06:00", "when": "Tuesday, November 3 at 10 AM"}}
+{"ok": true, "id": "1A2B3C4D", "slot": "2026-11-03T10:00:00-06:00", "when": "Tuesday, November 3 at 10 AM", "service_id": "consultation", "status": "booked", "name": "Sam Lee", "timezone": "America/Chicago"}
+{"ok": false, "code": "slot_taken", "message": "Not booked. That time was just taken. Say so, call available_slots again and offer other times."}
+```
+
+`available_slots` returns at most two slots; for a day with nothing open, `next_available` is
+the soonest open time after it (or null). `book_appointment` returns `status` `booked`,
+`pending` (requested; the business confirms it in Cal.com) or `already_booked` (same caller,
+service and time, still accepted in Cal.com; a repeat of a pending request stays `pending`).
+`reschedule_appointment` returns `status: rescheduled`, or `pending` when the new time still
+needs the business to confirm it, and `previous_when`; the booking keeps its `id`. `cancel_appointment` returns the cancelled booking. The local development calendar
+(`CALENDAR=local`) returns the same shapes, plus `open`/`closed_reason` for days it has no
+slots on.
+
+Codes: `invalid_arguments`, `unknown_tool`, `invalid_date`, `outside_horizon`,
+`service_required`, `unknown_service`, `confirmation_required`, `email_required`,
+`invalid_email`, `slot_unavailable`, `slot_taken`, `not_found`, `booking_rejected`, `unsupported_service`,
+`not_confirmed`, `calendar_unavailable`, `internal_error`. Each message says how to recover,
+and the prompt has a rule for each code (`tests/test_tools.py` and `tests/test_calcom.py` check
+this). The provider receives `is_error = !ok`. Results are cached per `tool_call_id` (last 100)
+so a retried call cannot book twice. The Cal.com requests behind each tool are below.
+
+### Cal.com requests
+
+| Tool | Cal.com request | Notes |
+| --- | --- | --- |
+| `business_info` | `GET /v2/event-types/{id}` (cached 5 min) | Facts from `business.json`; service names and lengths from Cal.com |
+| `available_slots` | `GET /v2/slots` for one event type, 14 days from the asked day, in your time zone | At most two times per answer; `needs_email` tells Riley to ask for an email |
+| `book_appointment` | `POST /v2/bookings`, start in UTC | Attendee name, email (if asked) and your time zone. A note goes into the booking `metadata`. A repeat request for the same service and time first reads `GET /v2/bookings/{uid}`: it is answered from that booking if it is still accepted or pending, and booked again if Cal.com cancelled, rejected or lost it |
+| `my_appointments` | `GET /v2/bookings/{uid}` for each of the caller's bookings | Bookings the business cancelled or moved in Cal.com are not listed |
+| `reschedule_appointment` | `POST /v2/bookings/{uid}/reschedule` | Cal.com makes a new booking uid; the caller keeps the same short id |
+| `cancel_appointment` | `POST /v2/bookings/{uid}/cancel` | |
+
+Each request sends `Authorization: Bearer <CAL_API_KEY>` and the `cal-api-version` value that
+Cal.com's API reference requires for that endpoint (`calcom.py` has the values).
+
+When Cal.com says no or does not answer:
+
+- A read that fails (timeout, error status, an unexpected body, an invalid key) returns
+  `calendar_unavailable`. Riley then says the booking system is not available right now. It does
+  not offer times without a tool result.
+- A booking request is sent once and never retried automatically.
+  - Cal.com refuses (4xx): the server checks that day's open times again and returns
+    `slot_taken` if the time is gone. Otherwise it returns `booking_rejected`.
+  - No answer, a dropped connection or a 5xx: the result is `not_confirmed`. The booking may or
+    may not exist, so Riley says it could not confirm the booking and does not try again. Check
+    your Cal.com bookings list.
+- A booking or a move that your event type must confirm first returns `status: pending`. Riley
+  says that the booking or the new time is requested, not confirmed.
+- A seated event type returns `unsupported_service` before any slot read or write. If Cal.com
+  still answers a booking with a `seatUid`, the booking is reported but not stored, so it can
+  never be moved or cancelled by phone.
+
+No SQLite transaction stays open during a Cal.com request. Each local write is one statement.
+
+### Events with fields
+
+`rtc_connected` carries `media`: `direct` (host or STUN-mapped address), `relay` (through TURN)
+or `unknown`. `provider_problem_<code>` is logged with the same codes as `voice.problem`.
+`turn_credentials_failed`: TURN was configured but no credentials came back; no call starts
+(browser 503, outbound 503, inbound `reject`).
+
+### Cloudflare TURN (`TURN_PROVIDER=cloudflare`)
+
+Before each call: `POST https://rtc.live.cloudflare.com/v1/turn/keys/{CLOUDFLARE_TURN_KEY_ID}/credentials/generate-ice-servers`
+with `Authorization: Bearer {CLOUDFLARE_TURN_API_TOKEN}` and `{"ttl": MAX_SESSION_SECONDS + 600}`,
+5 s timeout, no redirects. From the returned `iceServers`, the server keeps the first STUN URL
+and exactly one TURN URL for `TURN_TRANSPORT` (`tls`: `turns:…:443?transport=tcp`; `tcp`;
+`udp`), because aiortc uses only the first of each.
+
+### xAI realtime WebSocket (Grok Voice, subset used)
+
+`wss://api.x.ai/v1/realtime?model=<agent.toml grok.model>` with `Authorization: Bearer XAI_API_KEY`
+from the server only.
+Sent: `session.update` (after `conversation.created`: rendered instructions, voice, server VAD,
+`audio/pcm` 16000 in and out, transcription language hint and keyterms, the six function tools
+plus `end_call`), `conversation.item.create` with a non-interruptible `force_message` greeting,
+`input_audio_buffer.append` (base64 PCM16 16 kHz, 100 ms, only after `session.updated`),
+`conversation.item.create` `function_call_output`, `response.create` (once per response that
+produced tool outputs).
+Received: `conversation.created`, `session.updated`, `response.created`,
+`response.output_audio.delta` / `response.audio.delta` (dropped for responses the caller talked
+over), `input_audio_buffer.speech_started` (barge-in, ignored while the disclosure greeting
+plays), `response.function_call_arguments.done`, `response.done`, transcription and transcript
+deltas (only for optional local capture), `error` (harmless cancel races ignored; auth, rate
+limit, or anything before the session is ready ends the call).
+
+### ElevenLabs Agents WebSocket (subset used)
+
+Sent: `conversation_initiation_client_data` (dynamic variables), `{"user_audio_chunk": base64 PCM16 16 kHz, 100 ms}`,
+`pong`, `client_tool_result`.
+Received: `conversation_initiation_metadata` (must be `pcm_16000` both ways), `audio`,
+`interruption` (drop audio with `event_id ≤` the interruption), `ping`, `client_tool_call`,
+`user_transcript` / `agent_response` (only used for optional local capture), `client_error`.
+
+The signed URL comes from `GET /v1/convai/conversation/get-signed-url` with the server's API key
+(`platform_settings.auth.enable_auth = true`), and must be `wss://api.elevenlabs.io`.

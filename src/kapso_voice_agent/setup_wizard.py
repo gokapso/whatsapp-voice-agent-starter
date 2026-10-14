@@ -30,8 +30,8 @@ CALENDARS = {
 }
 HOSTS = {
     "local": ("This computer", "Browser test calls only. WhatsApp needs a public host."),
+    "railway": ("Railway (recommended)", "HTTPS only, no inbound UDP: call audio relays through Cloudflare TURN."),
     "vps": ("Linux server with a public IP", "WhatsApp audio reaches the server directly over UDP."),
-    "railway": ("Railway", "HTTPS only, no inbound UDP: call audio relays through Cloudflare TURN."),
 }
 KEY_HELP = {
     "ELEVENLABS_API_KEY": "ElevenLabs API key (elevenlabs.io > Developers > API keys)",
@@ -46,7 +46,7 @@ PLAIN = {"WHATSAPP_PHONE_NUMBER_ID": "Meta phone number ID (numeric, not the dis
 VALUE = re.compile(r"^[A-Za-z0-9._~+/=:@-]{1,512}$")
 CLIPBOARDS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["clip.exe"])
 # What a hosted server reads. DATA_DIR comes from the image; DEV_AGENT_WS_URL is loopback-only.
-SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "XAI_SIP_WEBHOOK_SECRET", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
+SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
                "OPERATOR_TOKEN", "CALLER_KEY_SECRET", "KAPSO_API_KEY", "WHATSAPP_PHONE_NUMBER_ID",
                "WHATSAPP_WEBHOOK_SECRET", "META_GRAPH_VERSION", "ICE_SERVERS_JSON", "TURN_PROVIDER",
                "CLOUDFLARE_TURN_KEY_ID", "CLOUDFLARE_TURN_API_TOKEN", "TURN_TRANSPORT", "ENABLE_OUTBOUND",
@@ -145,7 +145,7 @@ def status_lines(settings, spec, host):
         media = (f"Cloudflare TURN ({settings.turn_transport})", "ready") if settings.turn_provider == "cloudflare" else \
             ("TURN relay", "missing CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN")
     elif host == "vps":
-        media = ("direct UDP", "open the host firewall to UDP (docs/deploy.md section 3)")
+        media = ("direct UDP", "open the host firewall to UDP (docs/deploy.md)")
     else:
         media = ("this computer", "ready for browser calls")
     rows.append(("Call audio", *media))
@@ -156,7 +156,7 @@ def status_lines(settings, spec, host):
 def next_steps(settings, provider, calendar, host, command):
     steps = []
     if calendar == "calcom":
-        steps.append("Fill in agent/business.json (docs/calendar.md), then run `" + command + " calendar check`.")
+        steps.append("Fill in agent/business.json (docs/customize.md), then run `" + command + " calendar check`.")
     if provider == "elevenlabs" and not settings.elevenlabs_agent_id:
         steps.append(f"Create the ElevenLabs agent: `{command} agent apply --yes --save-agent-id`.")
     steps.append(f"Check everything offline: `{command} check`.")
@@ -167,8 +167,8 @@ def next_steps(settings, provider, calendar, host, command):
         steps.append("Copy the repository and this env file to the server, then follow docs/deploy.md "
                      "(examples/vps has a Compose file with host networking and a Caddy HTTPS proxy).")
     else:
-        steps.append("Follow docs/deploy-railway.md. To fill the service's variables, run "
-                     f"`{command} export-env --for railway` and paste them into the Raw Editor.")
+        steps.append("Follow docs/deploy.md. To set the service's variables, run "
+                     f"`{command} railway variables --yes` in the linked directory.")
     if provider == "grok":
         steps.append("Each test call is a real Grok Voice session that xAI bills per minute; calls say they are recorded "
                      "(xAI keeps API traffic for 30 days).")
@@ -247,8 +247,7 @@ def server_variables(path, target):
     notes = []
     if target == "pipecat-cloud":
         # No webhook and no console in a Cloud session; Kapso's API vouches for each call (cloud.py).
-        keys = tuple(k for k in SERVER_KEYS if k not in ("OPERATOR_TOKEN", "WHATSAPP_WEBHOOK_SECRET", "ENABLE_OUTBOUND",
-                                                         "XAI_SIP_WEBHOOK_SECRET"))
+        keys = tuple(k for k in SERVER_KEYS if k not in ("OPERATOR_TOKEN", "WHATSAPP_WEBHOOK_SECRET", "ENABLE_OUTBOUND"))
         if not values.get("CALLER_KEY_SECRET"):
             raise SetupError("Set CALLER_KEY_SECRET in the env file first. Use the same value everywhere this number's "
                              "calls are answered, or callers lose their bookings")
@@ -318,7 +317,7 @@ def railway_variables(path, yes=False, out=print, runner=subprocess.run):
         if result.returncode != 0:
             raise SetupError(f"`railway variable set {key}` failed (exit {result.returncode}). Run `railway link` in this "
                              "directory and pick the voice-agent service, then try again")
-    out(f"Set {len(names)} variables on the linked Railway service. Deploy with `railway up` (see docs/deploy-railway.md).")
+    out(f"Set {len(names)} variables on the linked Railway service. Deploy with `railway up` (see docs/deploy.md).")
     for note in notes:
         out("Note: " + note)
     return names

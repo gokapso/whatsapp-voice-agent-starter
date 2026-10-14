@@ -33,6 +33,17 @@ def test_scanner_rules_catch_planted_samples():
         assert not any(pattern.search(safe) for pattern in secret_scan.RULES.values()), safe
 
 
+def test_only_the_pinned_public_artwork_may_be_binary():
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import secret_scan
+    name = "assets/kapso-voice-agent-starter.png"
+    banner = (REPO_ROOT / name).read_bytes()
+    assert secret_scan.binary_finding(name, banner) is None
+    assert secret_scan.binary_finding(name, banner + b"x") == "binary_file"
+    assert secret_scan.binary_finding("assets/other.png", banner) == "binary_file"
+    assert secret_scan.binary_finding("data/caller.wav", b"RIFF\x00\x00") == "binary_file"
+
+
 def test_docker_image_copies_the_root_files_that_init_and_the_package_build_read():
     # `voice-agent init` reads .env.example; the package build reads the readme and license files.
     lines = (REPO_ROOT / "Dockerfile").read_text().splitlines()

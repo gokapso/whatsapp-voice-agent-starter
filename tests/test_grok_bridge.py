@@ -391,7 +391,7 @@ def test_browser_call_runs_greeting_tool_audio_and_end_call_over_real_webrtc(gro
                  "tool_available_slots_ok", "tool_end_call_ok", "agent_conversation_ended"):
         assert name in events
     assert state["voice"] == {"provider": "grok", "label": "Grok Voice", "model": "grok-voice-3.0", "voice": "eve",
-                              "offline_fake_agent": False, "problem": None}
+                              "offline_fake_agent": False, "setup_step": None, "problem": None}
     assert "xai-test-key-not-real" not in json.dumps(state)
 
 
