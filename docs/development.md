@@ -54,12 +54,16 @@ The fake agent stands in for ElevenLabs. It plays a short tone as its "greeting"
 check the media path and the console without spending provider minutes.
 
 ```sh
-uv run voice-agent dev init-env              # writes .env.dev (0600): operator token, caller key, fake agent URL,
-                                             # CALENDAR=local; prints the operator token
+uv run voice-agent dev init-env              # writes .env.dev (0600): console access key, caller key, fake agent URL,
+                                             # CALENDAR=local
 uv run voice-agent dev fake-agent &          # ws://127.0.0.1:8765
 uv run voice-agent --env-file .env.dev serve # prints the console URL
-# open http://127.0.0.1:8080/operator/ and paste the token (grep OPERATOR_TOKEN .env.dev shows it again)
+uv run voice-agent --env-file .env.dev console-key   # copies the console access key
+# open http://127.0.0.1:8080/operator/, paste it and select Sign in, then Start test call
 ```
+
+For the Grok Voice bridge, use `dev init-env --provider grok` and `dev fake-agent --provider grok`:
+the fake then speaks the xAI realtime events instead of the ElevenLabs ones.
 
 `DEV_AGENT_WS_URL` accepts loopback addresses only. The fake agent records nothing and is never
 read over the network, so its greeting has no recording sentence unless `LOCAL_CAPTURE=1`. Stop
@@ -74,6 +78,10 @@ the end.
 uv run python scripts/smoke_setup.py   # init, check and serve in a clean environment; then a fake-agent browser call
 uv run python scripts/smoke_local.py   # health, webhook signature, operator auth, fake-agent browser call
 ```
+
+With Docker, `scripts/smoke_turn_relay.py` checks the image the way Railway runs it: started as
+root on a root-owned volume with `$PORT` set, and a call whose audio can only go through a coturn
+TURN relay over TCP (`docker build -t kapso-voice-starter:dev .` first).
 
 `smoke_setup.py` gives the processes only `PATH`, a temporary `HOME` and `DATA_DIR`, and the env
 files the commands under test write. It checks that `init` writes a private `.env` and refuses to

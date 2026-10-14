@@ -44,8 +44,9 @@ The process environment wins over the env file. Run these commands in a shell wh
 These checks make real bookings in your Cal.com account, and Cal.com sends its usual emails for
 them. Use your own name and email address.
 
-Open the console URL that `serve` prints, paste the token from `.env.acceptance`, and select
-**Start browser call**. Keep the console's **Events** box open; it shows tool calls and session
+Open the console URL that `serve` prints, sign in with the console access key
+(`uv run voice-agent --env-file .env.acceptance console-key` copies it), and select
+**Start test call**. Keep the console's **Events** box open; it shows tool calls and session
 events, never transcript text. Keep your Cal.com **Bookings** page open in another tab.
 
 A call lasts at most five minutes (`limits.max_duration_seconds`) and the agent allows 10 calls
@@ -84,6 +85,39 @@ Afterwards, in this order:
    of that directory.
 2. Stop `serve`. Delete the test agent in the ElevenLabs dashboard if you do not need it.
 3. Delete `.env.acceptance` and `data/acceptance-riley/`. Leave `data/` itself alone.
+
+## Level 2 with Grok Voice
+
+Same checklist, with xAI instead of ElevenLabs. There is no agent to create or delete. Use the
+local development calendar first, so no real booking is made while you listen to the voice:
+
+```sh
+uv run voice-agent --env-file .env.grok setup --provider grok --calendar local --host local   # asks for XAI_API_KEY, hidden
+echo 'DATA_DIR=data/acceptance-grok' >> .env.grok
+uv run voice-agent --env-file .env.grok check
+uv run voice-agent --env-file .env.grok serve
+```
+
+Sign in, check that the Setup card shows **Grok Voice · grok-voice-3.0 · voice eve**, and select
+**Start test call**. Keep calls short: each one is a real xAI session billed per minute. Then run
+checks 1 to 8, 10 to 12, 14 and 15 above (check 9 needs Cal.com). Riley always says the call is
+recorded with Grok Voice. If the call ends at once, the Setup card says why: a rejected key, a
+rate limit, a model the key cannot use, or no connection to xAI.
+
+These Grok things are not yet tested against the real service: the greeting through
+`force_message`, barge-in timing, the voice `eve`, and tool calls from `grok-voice-3.0`. Report what
+you hear. When done, delete `.env.grok` and `data/acceptance-grok/`.
+
+## Hosted server, before a phone call
+
+Test a hosted server in this order; each step proves one more layer:
+
+1. `curl https://<host>/healthz` returns `{"ok": true}` and the server's log banner shows nothing
+   missing for browser calls.
+2. Sign in to `https://<host>/operator/` and make a browser test call. The event log's
+   `rtc_connected` shows `media=direct` (VPS) or `media=relay` (TURN, for example Railway). This
+   proves the provider and the media path to your browser, not to Meta.
+3. Register the Kapso webhook and make one WhatsApp call (level 3).
 
 ## Optional: provider tests (ElevenLabs agent tests)
 

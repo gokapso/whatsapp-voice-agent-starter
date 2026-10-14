@@ -6,14 +6,22 @@
 | --- | --- | --- |
 | `POST /webhooks/whatsapp` | The internet | HMAC-SHA256 over the raw body with `WHATSAPP_WEBHOOK_SECRET`, checked before JSON parsing; 1 MB cap; only `calls` changes for the configured phone number ID; invalid events ignored without side effects |
 | `GET /healthz` | The internet | Returns `{"ok": true}` only |
-| `/operator/*` | Anyone who can reach the port | Absent (404) unless `OPERATOR_TOKEN` (≥ 32 chars) is set; API needs `Authorization: Bearer`; constant-time compare; bearer header is not sent automatically by browsers, so no CSRF; page has a strict CSP and no embedded secrets |
+| `/operator/*` | Anyone who can reach the port | Absent (404) unless `OPERATOR_TOKEN` (≥ 32 chars, the "console access key") is set; API needs `Authorization: Bearer`; constant-time compare; bearer header is not sent automatically by browsers, so no CSRF; page has a strict CSP and no embedded secrets; the console keeps the key in `sessionStorage` for that tab only, never in a URL or `localStorage` |
 | Outbound calling | Operator only | Also needs `ENABLE_OUTBOUND=1`; permission check before every connect; one attempt, never auto-retried |
-| Agent conversation | Server only | Signed URL fetched server-side; agent requires auth; URL host pinned to `wss://api.elevenlabs.io`; `DEV_AGENT_WS_URL` limited to loopback |
+| Agent conversation | Server only | ElevenLabs: signed URL fetched server-side; agent requires auth; URL host pinned to `wss://api.elevenlabs.io`. Grok Voice: `XAI_API_KEY` sent only as a header from this server to the fixed `wss://api.x.ai/v1/realtime`. `DEV_AGENT_WS_URL` limited to loopback |
+| TURN relay | Server only | `CLOUDFLARE_TURN_API_TOKEN` stays on the server; per-call TURN credentials go only into this server's ICE agent, never to a browser or a log |
 | Calendar | Server only | `CAL_API_KEY` stays on the server; fixed host `https://api.cal.com`, no redirects, short timeouts; the model never sees Cal.com uids and cannot pass an identifier to look anything up |
 | Recordings, bookings | Local filesystem only | No HTTP route serves files; `DATA_DIR` 0700, files 0600 (SQLite journal included) under any umask; size, count and age caps, pruned at startup and hourly |
 
 Recommended: expose only `/webhooks/whatsapp` and `/healthz` publicly at your proxy, and reach
-`/operator` over a VPN or SSH tunnel. Set `ALLOWED_HOSTS` to your hostnames.
+`/operator` over a VPN or SSH tunnel (`examples/vps` does this). Set `ALLOWED_HOSTS` to your
+hostnames. On hosts with one public HTTPS domain and no tunnel, such as Railway, the console is on
+the internet: keep the generated 43-character key, and rotate it if it leaks.
+
+`voice-agent init` and `setup` never print the console access key. `voice-agent console-key`
+copies it to the clipboard; `--show` prints it on request. `setup` reads provider keys with
+hidden input and writes them to the 0600 env file only; `railway variables --yes` passes each
+value to the Railway CLI on stdin, never as a command-line argument.
 
 ## Private data on disk
 

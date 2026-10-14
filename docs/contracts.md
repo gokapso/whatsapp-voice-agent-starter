@@ -9,7 +9,7 @@ Small, stable interfaces. Change them only together with their tests.
 | `GET /healthz` | none | — | `{"ok": true}` |
 | `POST /webhooks/whatsapp` | `X-Webhook-Signature` = hex HMAC-SHA256(raw body, `WHATSAPP_WEBHOOK_SECRET`) | Meta webhook JSON, ≤ 1 MB | `{"calls": n, "statuses": n, "ignored": n}`; 401 bad signature; 400 not JSON; 413 too large; 503 secret unset, or an inbound connect while the agent is not configured |
 | `GET /operator/`, `/operator/app.js`, `/operator/console.css` | none (page has no secrets); 404 if `OPERATOR_TOKEN` unset | — | console and assets |
-| `GET /operator/api/state` | `Authorization: Bearer <OPERATOR_TOKEN>` | — | readiness flags, `agent_missing` (setting names), `recording` `{provider_recording: on\|off\|unknown\|not_checked\|off (offline fake agent), local_capture, agent_toml_record_audio, next_greeting_says_recorded: true\|false\|null, last_check_error}`, active calls `{ref, direction, state}`, events, native artifact notices |
+| `GET /operator/api/state` | `Authorization: Bearer <OPERATOR_TOKEN>` (the console access key) | — | readiness flags, `agent_missing` (setting names), `voice` `{provider: elevenlabs\|grok, label, model, voice, offline_fake_agent, problem: null\|{problem: auth\|rate_limited\|not_found\|unreachable\|failed, at}}`, `calendar` (`calcom`\|`local`\|null), `recording` `{provider_recording: on\|off\|unknown\|not_checked\|off (offline fake agent), local_capture, agent_toml_record_audio, next_greeting_says_recorded: true\|false\|null, last_check_error}`, active calls `{ref, direction, state}`, events, native artifact notices |
 | `POST /operator/api/browser-call` | bearer | `{"sdp": "<offer>"}` | `{"ref", "type": "answer", "sdp"}`; 409 at capacity; 503 agent not ready (lists what is missing) or recording setting unknown |
 | `POST /operator/api/calls/{ref}/hangup` | bearer | — | `{"ended": true}`; 404 unknown ref |
 | `POST /operator/api/outbound/permission` | bearer + `ENABLE_OUTBOUND=1` | `{"recipient": "<E.164 digits or US.…>"}` | `{"permission_status", "can_call"}` |
@@ -65,6 +65,38 @@ and the prompt has a rule for each code (`tests/test_tools.py` and `tests/test_c
 this). The provider receives `is_error = !ok`. Results are cached per `tool_call_id` (last 100)
 so a retried call cannot book twice. The Cal.com requests behind each tool are in
 `docs/calendar.md`.
+
+## Events with fields
+
+`rtc_connected` carries `media`: `direct` (host or STUN-mapped address), `relay` (through TURN)
+or `unknown`. `provider_problem_<code>` is logged with the same codes as `voice.problem`.
+`turn_credentials_failed`: TURN was configured but no credentials came back; no call starts
+(browser 503, outbound 503, inbound `reject`).
+
+## Cloudflare TURN (`TURN_PROVIDER=cloudflare`)
+
+Before each call: `POST https://rtc.live.cloudflare.com/v1/turn/keys/{CLOUDFLARE_TURN_KEY_ID}/credentials/generate-ice-servers`
+with `Authorization: Bearer {CLOUDFLARE_TURN_API_TOKEN}` and `{"ttl": MAX_SESSION_SECONDS + 600}`,
+5 s timeout, no redirects. From the returned `iceServers`, the server keeps the first STUN URL
+and exactly one TURN URL for `TURN_TRANSPORT` (`tls`: `turns:…:443?transport=tcp`; `tcp`;
+`udp`), because aiortc uses only the first of each.
+
+## xAI realtime WebSocket (Grok Voice, subset used)
+
+`wss://api.x.ai/v1/realtime?model=<agent.toml grok.model>` with `Authorization: Bearer XAI_API_KEY`
+from the server only.
+Sent: `session.update` (after `conversation.created`: rendered instructions, voice, server VAD,
+`audio/pcm` 16000 in and out, transcription language hint and keyterms, the six function tools
+plus `end_call`), `conversation.item.create` with a non-interruptible `force_message` greeting,
+`input_audio_buffer.append` (base64 PCM16 16 kHz, 100 ms, only after `session.updated`),
+`conversation.item.create` `function_call_output`, `response.create` (once per response that
+produced tool outputs).
+Received: `conversation.created`, `session.updated`, `response.created`,
+`response.output_audio.delta` / `response.audio.delta` (dropped for responses the caller talked
+over), `input_audio_buffer.speech_started` (barge-in, ignored while the disclosure greeting
+plays), `response.function_call_arguments.done`, `response.done`, transcription and transcript
+deltas (only for optional local capture), `error` (harmless cancel races ignored; auth, rate
+limit, or anything before the session is ready ends the call).
 
 ## ElevenLabs Agents WebSocket (subset used)
 

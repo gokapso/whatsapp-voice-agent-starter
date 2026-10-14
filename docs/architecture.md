@@ -18,7 +18,8 @@ WhatsApp caller ──(Meta WebRTC audio, UDP)───────────�
 ```
 
 - HTTPS carries webhooks, SDP and call actions. Audio uses its own WebRTC path (ICE, maybe TURN).
-- ElevenLabs owns the conversation. Pipecat is only the audio transport and pipeline runner.
+- The voice provider owns the conversation: ElevenLabs Agents by default, or xAI Grok Voice with
+  `VOICE_PROVIDER=grok` (`grok_bridge.py`). Pipecat is only the audio transport and pipeline runner.
 - This bridge and call handling carried one real English outbound WhatsApp call to a handset
   (2026-10-07), with the earlier local booking tools; the Cal.com tools have not been on a real
   call yet. Inbound calls use the same bridge but were not part of that call. It does not use
@@ -61,7 +62,10 @@ whose outcome is unknown is reported, never retried.
 | `src/kapso_voice_agent/app.py` | HTTP routes: public webhook + health, operator API/console | `test_http_surface.py` |
 | `src/kapso_voice_agent/calls.py` | Webhook event rules, inbound lifecycle, browser calls, capacity | `test_http_surface.py`, `test_call_flow.py` |
 | `src/kapso_voice_agent/outbound.py` | Outbound call state machine | `test_outbound.py` |
-| `src/kapso_voice_agent/bridge.py` | Pipecat pipeline + ElevenLabs WebSocket protocol | `test_call_flow.py` |
+| `src/kapso_voice_agent/bridge.py` | Pipecat pipeline + ElevenLabs WebSocket protocol; picks the bridge for `VOICE_PROVIDER` | `test_call_flow.py` |
+| `src/kapso_voice_agent/grok_bridge.py` | xAI Grok Voice realtime protocol in the same pipeline slot | `test_grok_bridge.py` |
+| `src/kapso_voice_agent/turn.py` | Per-call ICE servers; Cloudflare TURN credentials | `test_turn.py` |
+| `src/kapso_voice_agent/setup_wizard.py` | `voice-agent setup`, `export-env`, `railway variables` | `test_setup_wizard.py` |
 | `src/kapso_voice_agent/kapso.py` | Kapso call-action client | via flow tests |
 | `src/kapso_voice_agent/tools.py` | Tool schemas (source of truth) and dispatcher | `test_tools.py` |
 | `src/kapso_voice_agent/calcom.py` | Cal.com calendar: availability, bookings, caller-to-booking map | `test_calcom.py` |
@@ -80,6 +84,8 @@ whose outcome is unknown is reported, never retried.
 | `agent/` | Editable prompt, settings, business facts, development calendar data | `test_agent_config.py` |
 | `agent/provider-tests/` | Opt-in ElevenLabs agent tests (LLM-judged, run by the operator) | `test_agent_config.py` (shape only) |
 | `scripts/smoke_setup.py`, `smoke_local.py` | Development smoke checks with real processes, offline | run by hand |
+| `scripts/smoke_turn_relay.py` | Docker: image as Railway runs it, audio only through a coturn relay | run by hand |
+| `.railway/railway.ts`, `docker-entrypoint.sh`, `examples/vps/` | Railway project, root hand-off for volumes, VPS Compose + Caddy | `docs/deploy-railway.md` |
 
 ## Contracts
 
