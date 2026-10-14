@@ -1,0 +1,47 @@
+# One Linux server with a public IP (for example a Hetzner, DigitalOcean or OVH VPS). The
+# simplest setup where WhatsApp audio reaches the server directly, without TURN.
+#
+#   cp ../../.env .env               # from `voice-agent setup --host vps`; keep it 0600
+#   VOICE_AGENT_DOMAIN=voice.example.com docker compose up -d --build
+#
+# Host networking: aiortc binds random UDP ports on the host's own addresses, which Docker's
+# port publishing cannot map. Caddy gets the HTTPS certificate and exposes only the webhook
+# and the health check. Reach the operator console through SSH:
+#   ssh -L 8080:127.0.0.1:8080 you@your-server   then open http://127.0.0.1:8080/operator/
+# Firewall: TCP 80 and 443 in, and UDP in to the ephemeral ports (aiortc has no port range
+# setting). See docs/deploy.md section 3.
+services:
+  voice-agent:
+    build: ../..
+    env_file: .env
+    network_mode: host
+    environment:
+      DATA_DIR: /app/data
+      PORT: "8080"
+      ALLOWED_HOSTS: ${VOICE_AGENT_DOMAIN:?set VOICE_AGENT_DOMAIN},127.0.0.1:8080
+    # Only Caddy and an SSH tunnel reach the HTTP port.
+    command: ["voice-agent", "serve", "--host", "127.0.0.1"]
+    volumes:
+      - voice-agent-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    network_mode: host
+    environment:
+      VOICE_AGENT_DOMAIN: ${VOICE_AGENT_DOMAIN:?set VOICE_AGENT_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  voice-agent-data:
+  caddy-data:
+  caddy-config:

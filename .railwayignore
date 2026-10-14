@@ -1,0 +1,8 @@
+# `railway up` uploads this directory. Keep private and local-only files out (it also reads .gitignore).
+.env
+.env.*
+!.env.example
+data/
+build/
+.venv/
+tmp/

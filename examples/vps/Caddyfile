@@ -1,0 +1,14 @@
+# Public HTTPS for the voice agent. Caddy gets and renews the certificate for the domain.
+{$VOICE_AGENT_DOMAIN} {
+	# Kapso's signed Meta Calling webhooks, and the health check.
+	handle /webhooks/whatsapp {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /healthz {
+		reverse_proxy 127.0.0.1:8080
+	}
+	# The operator console is not published; use the SSH tunnel in compose.yaml.
+	handle {
+		respond 404
+	}
+}

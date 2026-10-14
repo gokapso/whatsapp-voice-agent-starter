@@ -6,7 +6,7 @@ Start here: `voice-agent init` writes a private .env with fresh local secrets, a
 Offline commands (no network, no credentials): setup, init, console-key, export-env, check, agent plan, tools schema,
 tools call (with CALENDAR=local), kapso webhook (without --yes), artifacts prune, dev fake-agent,
 dev init-env, secrets.
-Network commands (operator only): serve, agent apply --yes, agent verify, kapso webhook --yes,
+Network commands (operator only): serve, agent apply --yes, agent verify, kapso webhook --yes, railway variables --yes,
 artifacts fetch, calendar check (read-only), tools call (with Cal.com; writes need --yes).
 """
 
@@ -479,6 +479,14 @@ def cmd_export_env(args):
         fail(str(error))
 
 
+def cmd_railway_variables(args):
+    from .setup_wizard import SetupError, default_path, railway_variables
+    try:
+        railway_variables(default_path(args.env_file), yes=args.yes)
+    except SetupError as error:
+        fail(str(error))
+
+
 def cmd_console_key(args):
     """Copy OPERATOR_TOKEN (the console access key) to the clipboard, or print it with --show.
     It is a key for this server's console, not for Kapso, ElevenLabs or xAI."""
@@ -528,6 +536,10 @@ def parser():
     export.add_argument("--for", dest="target", choices=("railway", "vps"), required=True)
     export.add_argument("--show", action="store_true", help="Print them instead of copying (they contain secrets)")
     export.set_defaults(func=cmd_export_env)
+    railway = commands.add_parser("railway", help="Railway helpers").add_subparsers(dest="railway_command", required=True)
+    push = railway.add_parser("variables", help="Set the server's variables on the linked Railway service (dry run unless --yes)")
+    push.add_argument("--yes", action="store_true", help="Really set them (values go through stdin)")
+    push.set_defaults(func=cmd_railway_variables)
     key = commands.add_parser("console-key", help="Copy the operator console access key (OPERATOR_TOKEN) to the clipboard")
     key.add_argument("--show", action="store_true", help="Print it instead (it stays in your terminal history)")
     key.set_defaults(func=cmd_console_key)

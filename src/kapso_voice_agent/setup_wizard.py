@@ -232,8 +232,8 @@ def run(path, command, provider=None, calendar=None, host=None, whatsapp=None, p
             "calendar": calendar, "host": host}
 
 
-def export_env(path, target, show=False, out=print):
-    """KEY=value lines a hosted server needs, for the host's bulk variable editor."""
+def server_variables(path, target):
+    """KEY=value lines a hosted server needs, and notes about what will not work there."""
     if not path.is_file():
         raise SetupError(f"{path} does not exist; run `voice-agent setup` first")
     values = read_env(path)
@@ -252,6 +252,12 @@ def export_env(path, target, show=False, out=print):
         notes.append("CALENDAR=local keeps bookings in the server's volume; use Cal.com for real callers.")
     if values.get("DEV_AGENT_WS_URL"):
         notes.append("DEV_AGENT_WS_URL is left out: the offline fake agent runs only on this computer.")
+    return lines, notes
+
+
+def export_env(path, target, show=False, out=print):
+    """Copy (or with show, print) the server's variables for the host's bulk variable editor."""
+    lines, notes = server_variables(path, target)
     text = "\n".join(lines) + "\n"
     if show:
         out(text, end="")
@@ -262,6 +268,32 @@ def export_env(path, target, show=False, out=print):
     for note in notes:
         out("Note: " + note)
     return lines
+
+
+def railway_variables(path, yes=False, out=print, runner=subprocess.run):
+    """Set the server's variables on the Railway service linked to this directory. Dry run unless
+    yes. Each value goes through `railway variable set KEY --stdin`, never the command line."""
+    lines, notes = server_variables(path, "railway")
+    names = [line.split("=", 1)[0] for line in lines]
+    if not shutil.which("railway"):
+        raise SetupError("Install the Railway CLI (https://docs.railway.com/cli), then `railway login` and `railway link`")
+    if not yes:
+        out(f"Dry run: would set {len(names)} variables on the linked Railway service: " + ", ".join(names))
+        out("Each value is sent through stdin (`railway variable set KEY --stdin --skip-deploys`). Add --yes to set them.")
+        for note in notes:
+            out("Note: " + note)
+        return names
+    for line in lines:
+        key, value = line.split("=", 1)
+        result = runner(["railway", "variable", "set", key, "--stdin", "--skip-deploys"], input=value.encode(),
+                        capture_output=True, timeout=60)
+        if result.returncode != 0:
+            raise SetupError(f"`railway variable set {key}` failed (exit {result.returncode}). Run `railway link` in this "
+                             "directory and pick the voice-agent service, then try again")
+    out(f"Set {len(names)} variables on the linked Railway service. Deploy with `railway up` (see docs/deploy-railway.md).")
+    for note in notes:
+        out("Note: " + note)
+    return names
 
 
 def copy_to_clipboard(text):

@@ -122,3 +122,23 @@ def test_console_key_copies_without_printing_and_shows_only_on_request(tmp_path,
     monkeypatch.setattr(setup_wizard, "copy_to_clipboard", lambda text: False)
     with pytest.raises(SystemExit):
         cli.main(["--env-file", str(path), "console-key"])
+
+
+def test_railway_variables_is_a_dry_run_and_then_sends_values_only_through_stdin(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    cli.main(["--env-file", str(path), "init"])
+    update_env(path, {"VOICE_PROVIDER": "grok", "XAI_API_KEY": XAI_KEY, "CALENDAR": "local"})
+    monkeypatch.setattr(setup_wizard.shutil, "which", lambda name: "/usr/local/bin/" + name)
+    calls, printed = [], []
+
+    def runner(command, input, **kwargs):
+        calls.append((command, input))
+        return type("Done", (), {"returncode": 0})()
+    names = setup_wizard.railway_variables(path, out=printed.append, runner=runner)
+    assert calls == [] and "Dry run" in printed[0] and "XAI_API_KEY" in names
+    setup_wizard.railway_variables(path, yes=True, out=printed.append, runner=runner)
+    assert all(command[:3] == ["railway", "variable", "set"] and command[4:] == ["--stdin", "--skip-deploys"]
+               for command, _ in calls)
+    assert not any(XAI_KEY in part for command, _ in calls for part in command)
+    assert (["railway", "variable", "set", "XAI_API_KEY", "--stdin", "--skip-deploys"], XAI_KEY.encode()) in calls
+    assert XAI_KEY not in "\n".join(printed)
