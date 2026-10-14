@@ -3,7 +3,12 @@
 Pipeline: transport.input() -> ElevenAgentBridge -> transport.output() [-> local recorder]
 The bridge forwards 16 kHz PCM caller audio to the agent WebSocket, plays the agent's PCM back,
 honours interruptions, answers pings and runs client tools locally. There is no second LLM, ASR
-or TTS here.
+or TTS here. With VOICE_PROVIDER=grok, grok_bridge.GrokAgentBridge takes the bridge's place.
+
+The agent speaks its greeting as soon as the conversation opens. So the bridge gets the signed URL
+when the pipeline starts, but opens the conversation only once the call's WebRTC media is
+connected (`media_ready`); otherwise the start of the AI disclosure could play into a call whose
+audio is not flowing yet.
 """
 
 import asyncio
@@ -31,9 +36,49 @@ CHUNK_BYTES = 3200  # 100 ms of 16 kHz mono PCM16
 SIGNED_URL_API = "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url"
 
 
+class ProviderRejected(Exception):
+    """The voice provider answered a session request with an HTTP error status."""
+
+    def __init__(self, status):
+        super().__init__(f"Voice provider HTTP {status}")
+        self.status = status
+
+
+def provider_problem(error):
+    """Short operator-facing reason a provider session did not start (events.PROVIDER_PROBLEMS)."""
+    status = getattr(error, "status", None)
+    if status is None:
+        status = getattr(getattr(error, "response", None), "status_code", None)  # websockets InvalidStatus
+    if status in (401, 403):
+        return "auth"
+    if status == 429:
+        return "rate_limited"
+    if status in (400, 404):
+        return "not_found"
+    if isinstance(status, int) and status >= 500:
+        return "unreachable"
+    if isinstance(error, (OSError, TimeoutError, httpx.TransportError)):
+        return "unreachable"
+    return "failed"
+
+
 def make_connection(ice_json):
     servers = [IceServer(**row) for row in json.loads(ice_json)]
     return SmallWebRTCConnection(ice_servers=servers, connection_timeout_secs=30)
+
+
+def media_path(connection):
+    """How the call's audio flows: "relay" (through TURN), "direct" (host or STUN-mapped address) or
+    "unknown". Reads aiortc's selected ICE pair; best effort, for the operator log only."""
+    try:
+        transceiver = connection.pc.getTransceivers()[0]
+        pairs = list(transceiver.sender.transport.transport._connection._nominated.values())
+    except (AttributeError, IndexError, TypeError):
+        return "unknown"
+    if not pairs:
+        return "unknown"
+    types = {pairs[0].local_candidate.type, pairs[0].remote_candidate.type}
+    return "relay" if "relay" in types else "direct"
 
 
 def meta_sdp(sdp):
@@ -50,7 +95,7 @@ async def signed_url(settings):
         response = await client.get(SIGNED_URL_API, headers={"xi-api-key": settings.elevenlabs_api_key},
                                     params={"agent_id": settings.elevenlabs_agent_id})
     if response.is_error:
-        raise RuntimeError(f"ElevenLabs session authorization HTTP {response.status_code}")
+        raise ProviderRejected(response.status_code)
     url = response.json()["signed_url"]
     parsed = urlparse(url)
     if parsed.scheme != "wss" or parsed.hostname != "api.elevenlabs.io":
@@ -72,21 +117,20 @@ class ElevenAgentBridge(FrameProcessor):
         self.stopping = False
         self.audio_in = self.audio_out = 0
         self.conversation_id = None
+        self.url = None                  # signed URL, fetched when the pipeline starts
+        self.media_connected = False     # set by the session when WebRTC connects
+        self.opening = False
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
         if isinstance(frame, StartFrame):
             await self.push_frame(frame, direction)
             try:
-                url = await self.url_factory(self.context["settings"])
-                self.websocket = await connect(url, open_timeout=15, max_size=2_000_000)
-                await self.websocket.send(json.dumps({"type": "conversation_initiation_client_data",
-                                                      "dynamic_variables": self.context["dynamic_variables"]}))
-                self.receive_task = self.create_task(self.receive(), name="eleven-agent-events")
-                self.log.add("agent_socket_connected", self.ref)
+                self.url = await self.url_factory(self.context["settings"])
             except Exception as error:
-                self.log.add("agent_start_failed_" + type(error).__name__, self.ref)
-                await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
+                await self.start_failed(error)
+                return
+            await self.open_conversation()
         elif isinstance(frame, InputAudioRawFrame) and direction == FrameDirection.DOWNSTREAM:
             if self.websocket is None:
                 return
@@ -115,6 +159,30 @@ class ElevenAgentBridge(FrameProcessor):
         else:
             await self.push_frame(frame, direction)
 
+    async def media_ready(self):
+        """Called by the session when the WebRTC peer connects."""
+        self.media_connected = True
+        await self.open_conversation()
+
+    async def open_conversation(self):
+        """Open the agent conversation once both the signed URL and connected media are there."""
+        if not (self.url and self.media_connected) or self.opening or self.stopping:
+            return
+        self.opening = True
+        try:
+            self.websocket = await connect(self.url, open_timeout=15, max_size=2_000_000)
+            await self.websocket.send(json.dumps({"type": "conversation_initiation_client_data",
+                                                  "dynamic_variables": self.context["dynamic_variables"]}))
+            self.receive_task = self.create_task(self.receive(), name="eleven-agent-events")
+            self.log.add("agent_socket_connected", self.ref)
+        except Exception as error:
+            await self.start_failed(error)
+
+    async def start_failed(self, error):
+        self.log.add("agent_start_failed_" + type(error).__name__, self.ref)
+        self.log.provider_failed(provider_problem(error), self.ref)
+        await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
+
     async def handle_event(self, message):
         kind = message.get("type")
         if kind == "conversation_initiation_metadata":
@@ -123,6 +191,7 @@ class ElevenAgentBridge(FrameProcessor):
                 raise ValueError("Agent audio format is not pcm_16000; fix the agent's tts/asr formats")
             self.conversation_id = data["conversation_id"]
             self.log.add("agent_session_ready", self.ref)
+            self.log.provider_ok()
         elif kind == "audio":
             data = message["audio_event"]
             if int(data["event_id"]) <= self.last_interrupt_id:
@@ -187,7 +256,7 @@ def session_context(settings, spec, store, direction, recording):
     """Per-call values sent to the agent. `recording` is the verified state from recording.py,
     so the greeting mentions recording only when it really applies."""
     today = store.now().date()
-    return {"settings": settings, "dynamic_variables": {
+    return {"settings": settings, "spec": spec, "dynamic_variables": {
         "today": today.isoformat(), "weekday": WEEKDAYS[today.weekday()].capitalize(), "timezone": str(store.timezone),
         "business_name": spec.business_label(),
         "call_purpose": "outbound_appointment_confirmation" if direction == "outbound" else "inbound",
@@ -195,11 +264,19 @@ def session_context(settings, spec, store, direction, recording):
         "recording_status": spec.recording_status(recording.recorded)}}
 
 
-class ElevenSession:
+def agent_bridge(settings):
+    """The bridge for VOICE_PROVIDER: ElevenLabs Agents (default) or xAI Grok Voice."""
+    if settings.voice_provider == "grok":
+        from .grok_bridge import GrokAgentBridge
+        return GrokAgentBridge
+    return ElevenAgentBridge
+
+
+class AgentSession:
     """One call: WebRTC transport + agent bridge (+ optional capture), run by a Pipecat worker."""
 
     def __init__(self, connection, settings, spec, store, caller, log, ref, direction="inbound", *, recording,
-                 url_factory=signed_url):
+                 url_factory=None):
         self.connection, self.log, self.ref = connection, log, ref
         self.closed = False
         self.capture_dir = None
@@ -209,7 +286,9 @@ class ElevenSession:
             self.capture = LocalCapture(settings.data_dir / "captures", ref, float(settings.max_session_seconds),
                                         settings.capture_retention_days, settings.capture_max_count)
         context = session_context(settings, spec, store, direction, recording)
-        self.bridge = ElevenAgentBridge(context, store, caller, log, ref, url_factory=url_factory, capture=self.capture)
+        bridge = agent_bridge(settings)
+        self.bridge = bridge(context, store, caller, log, ref, capture=self.capture,
+                             **({"url_factory": url_factory} if url_factory else {}))
         processors = [self.transport.input(), self.bridge, self.transport.output()]
         if self.capture:
             processors.append(self.capture.recorder)
@@ -223,7 +302,8 @@ class ElevenSession:
 
         @self.transport.event_handler("on_client_connected")
         async def connected(transport, client):
-            log.add("rtc_connected", ref)
+            log.add("rtc_connected", ref, media=media_path(connection))
+            await self.bridge.media_ready()  # the greeting waits for connected media
 
         @self.transport.event_handler("on_client_disconnected")
         async def disconnected(transport, client):
@@ -254,3 +334,6 @@ class ElevenSession:
             except Exception as error:
                 self.log.add("local_capture_failed_" + type(error).__name__, self.ref)
         self.log.add("session_closed", self.ref)
+
+
+ElevenSession = AgentSession  # name used before the Grok bridge existed

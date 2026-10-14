@@ -7,11 +7,17 @@ Guide for coding agents (and people) changing this repository. Read this first, 
 
 A self-hosted English voice agent for WhatsApp calls through Kapso. A call arrives as a
 Kapso-signed Meta Calling webhook. This server answers it with WebRTC (Pipecat SmallWebRTC,
-audio only) and streams the audio to an ElevenLabs Agents conversation, which does speech
+audio only) and streams the audio to an ElevenLabs Agents conversation or, with
+`VOICE_PROVIDER=grok`, to xAI Grok Voice (`grok_bridge.py`); the provider does speech
 recognition, the LLM and text-to-speech. Tools run here, against the owner's Cal.com calendar
 (`calcom.py`), with a small private SQLite map of which caller owns which booking. The operator
 console can start the same session from a browser, which is how people test the agent before
 connecting a number.
+
+The same call code can run in a Pipecat Cloud session that Kapso starts for each call
+(`cloud.py`, `examples/pipecat-cloud`). Provider-hosted SIP (ElevenLabs, xAI) is prepared as dry
+runs and an xAI control service, but is blocked for WhatsApp today. Start with
+`docs/choose-where-calls-run.md`.
 
 Riley is a generic AI front desk. The owner's facts and Cal.com event types are in
 `agent/business.json` (`docs/calendar.md`). `CALENDAR=local` switches to an offline development
@@ -22,7 +28,9 @@ calendar (`store.py`, `agent/dev-calendar.json`) used by the tests; it is never 
 ```sh
 uv sync                                   # install exactly what uv.lock pins
 uv run pytest                             # full offline suite (~1.5 min; real local WebRTC)
+uv run voice-agent setup                  # guided .env: voice provider, calendar, host; hidden key input
 uv run voice-agent init                   # private .env with fresh local secrets; never overwrites
+uv run voice-agent console-key            # copies OPERATOR_TOKEN (the console access key); --show prints it
 uv run voice-agent check                  # validate agent.toml, prompt, greetings, tool behavior
 uv run voice-agent agent plan             # render build/agent-config.json (offline)
 uv run voice-agent tools schema           # tool definitions the provider receives
@@ -32,13 +40,18 @@ uv run voice-agent serve                  # http://127.0.0.1:8080; prints the co
 uv run voice-agent dev init-env           # private .env.dev for the offline fake agent
 uv run voice-agent dev fake-agent         # offline agent stand-in (DEV_AGENT_WS_URL): a tone, not a conversation
 uv run voice-agent artifacts prune        # delete expired local captures/downloads (offline)
+uv run voice-agent sip status             # read-only: Calling API or SIP for the number; never reads the SIP password
+uv run voice-agent sip plan --provider elevenlabs --number +15550100000   # dry run: blockers, requests, undo
+uv run voice-agent export-env --for pipecat-cloud --file build/pipecat-cloud.env   # 0600 secret set file
 uv run python scripts/smoke_setup.py      # init/check/serve + fake-agent browser call, clean environment, real processes
+uv run python scripts/smoke_turn_relay.py # Docker: Railway-style container, audio only through a TURN relay
 python3 scripts/secret_scan.py            # run before every commit
 uvx ruff check src tests scripts          # lint
 ```
 
 Commands that touch a provider are dry runs unless `--yes` is given: `agent apply`
-(`--save-agent-id` also writes a newly created agent's ID to the env file), `kapso webhook`.
+(`--save-agent-id` also writes a newly created agent's ID to the env file), `kapso webhook`,
+`railway variables`.
 `agent verify`, `calendar check` and `artifacts fetch` are read-only network calls. With Cal.com
 configured, `tools call` reads the real calendar and refuses book/reschedule/cancel without `--yes`. `agent verify` compares every
 value the repo sends, including the full prompt and each tool's description, parameters and
@@ -57,6 +70,11 @@ response settings; fields the provider adds by itself are ignored.
 | LLM behavior scenarios (opt-in, provider-judged) | `agent/provider-tests/*.json` | `pytest tests/test_agent_config.py`; run them per `docs/testing.md` |
 | Setup commands | `src/kapso_voice_agent/cli.py` | `pytest tests/test_setup_and_artifacts.py`, `scripts/smoke_setup.py` |
 | Call handling rules | `src/kapso_voice_agent/calls.py`, `outbound.py` | `pytest tests/test_http_surface.py tests/test_call_flow.py tests/test_outbound.py` |
+| Grok Voice protocol, model, voice | `src/kapso_voice_agent/grok_bridge.py`, `agent/agent.toml` `[grok]` | `pytest tests/test_grok_bridge.py` |
+| Pipecat Cloud entry, Kapso launch check | `src/kapso_voice_agent/cloud.py`, `examples/pipecat-cloud/` | `pytest tests/test_cloud_launch.py` |
+| Provider SIP plan, xAI SIP control | `src/kapso_voice_agent/sip.py`, `xai_sip.py`, `examples/*-sip/` | `pytest tests/test_xai_sip.py`, `voice-agent sip plan ...` |
+| TURN, hosting, guided setup | `turn.py`, `setup_wizard.py`, `.railway/railway.ts`, `examples/vps/` | `pytest tests/test_turn.py tests/test_setup_wizard.py`, `scripts/smoke_turn_relay.py` |
+| Operator console | `src/kapso_voice_agent/static/` | `pytest tests/test_http_surface.py`; check it in a browser, light and dark, at 320 px |
 | Recording notice decision | `src/kapso_voice_agent/recording.py` | `pytest tests/test_privacy_and_retention.py` |
 | Private files, retention | `src/kapso_voice_agent/private.py` | `pytest tests/test_privacy_and_retention.py` |
 
@@ -73,6 +91,8 @@ Tests enforce each of these. Do not weaken a test to make a change pass.
 
 1. **Signed webhook only.** `/webhooks/whatsapp` verifies `X-Webhook-Signature` (hex HMAC-SHA256
    of the raw body) before parsing. Only `calls` changes for `WHATSAPP_PHONE_NUMBER_ID` are used.
+   `/webhooks/xai-sip` is 404 unless `XAI_SIP_WEBHOOK_SECRET` is set and verifies a Standard Webhooks
+   signature first. A Pipecat Cloud launch is answered only after Kapso's API vouches for the call.
 2. **Operator controls are separate.** Everything under `/operator` needs `OPERATOR_TOKEN` and
    returns 404 when it is unset. Outbound calling also needs `ENABLE_OUTBOUND=1`. No secret is
    ever sent to the browser.
@@ -95,6 +115,8 @@ Tests enforce each of these. Do not weaken a test to make a change pass.
    stored ElevenLabs agent back (read-only) and uses its `record_voice`, not `agent.toml`'s
    intent. The greeting says "This call is recorded." only when that is on or `LOCAL_CAPTURE=1`.
    If the setting cannot be read, no session starts (inbound `reject`, browser/outbound 503).
+   With `VOICE_PROVIDER=grok` there is no stored agent: the greeting always says the call is
+   recorded, because xAI keeps API traffic for 30 days by default.
    The fake agent records nothing and is never read over the network. No Meta-native capture
    (`recording`/`transcription`) is requested by default.
 7. **Call lifecycle.** Agent starts only after `accept` (inbound) or `ACCEPTED` (outbound).
@@ -130,6 +152,6 @@ Tests enforce each of these. Do not weaken a test to make a change pass.
 
 ## Not in scope here
 
-- No second implementation behind a provider abstraction. If you add another voice runtime,
-  add a module beside `bridge.py` and choose it in `calls.py`.
+- No second implementation behind a provider abstraction. To add another voice runtime, add a
+  module beside `bridge.py` and `grok_bridge.py` and choose it in `bridge.agent_bridge`.
 - Multi-process scaling: call state is in memory in one process. See `docs/deploy.md`.

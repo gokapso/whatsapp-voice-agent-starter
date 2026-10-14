@@ -9,7 +9,8 @@ operator command with `--yes`, run after you read its dry-run output.
 - A Kapso project with a **dedicated Cloud API number** that Meta allows to use Calling. Kapso's
   messaging sandbox is not a Calling test number. Check Kapso's Calling setup guide for Meta's
   current eligibility rules.
-- An ElevenLabs account with Agents access, and the voice you want available to that account.
+- A voice provider: an ElevenLabs account with Agents access and the voice you want, or an xAI
+  API key for Grok Voice (`VOICE_PROVIDER=grok`; then skip section 4).
 - A Cal.com account with an event type for each service, and `agent/business.json` filled in
   (`docs/calendar.md`).
 - A host for this server with a public HTTPS URL **and** a working media path (section 3).
@@ -44,18 +45,30 @@ connects and nobody hears anything, it is almost always the media path.
 Options for media:
 
 1. **Host with a public IP, no NAT in the way** (simplest): run directly or with Docker
-   `network_mode: host` (Linux). Allow inbound/outbound UDP. aiortc uses random UDP ports;
-   it has no port-range setting, so a firewall must allow the ephemeral range.
-2. **Behind NAT or in Docker bridge networking:** add a TURN server to `ICE_SERVERS_JSON`, for
-   example `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]`. A STUN
-   entry only helps when the NAT is friendly; TURN relays audio when nothing else works.
-3. Managed WebRTC (Daily, Pipecat Cloud) is a different integration and was not tested with this
-   code.
+   `network_mode: host` (Linux); [`examples/vps`](../examples/vps) has a Compose file with Caddy
+   for HTTPS. Allow inbound/outbound UDP. aiortc uses random UDP ports; it has no port-range
+   setting, so a firewall must allow the ephemeral range. Hetzner Cloud firewalls, for example,
+   are stateful and block all inbound traffic without a rule
+   ([FAQ](https://docs.hetzner.com/cloud/firewalls/faq/)); whether replies to the server's own
+   UDP checks are enough for Meta's media was not tested, so add an inbound UDP rule.
+2. **Behind NAT, in Docker bridge networking, or on a host without inbound UDP (Railway):** relay
+   through TURN. Either set `TURN_PROVIDER=cloudflare` with `CLOUDFLARE_TURN_KEY_ID` and
+   `CLOUDFLARE_TURN_API_TOKEN` (fresh credentials for every call; `TURN_TRANSPORT=tls` relays over
+   TCP 443), or put a TURN server with long-lived credentials in `ICE_SERVERS_JSON`, for example
+   `[{"urls":"turn:turn.example.com:443?transport=tcp","username":"u","credential":"p"}]`.
+   aiortc uses only the **first** STUN URL and the **first** TURN URL it can use, so list the one
+   you want first. A STUN entry only helps when the NAT is friendly. See
+   [`deploy-railway.md`](deploy-railway.md).
+3. No server of yours: run each call in Pipecat Cloud ([`examples/pipecat-cloud`](../examples/pipecat-cloud)).
+   Provider SIP is blocked for WhatsApp today. See [`choose-where-calls-run.md`](choose-where-calls-run.md).
+
+The event `rtc_connected` in the console's event log shows `media=direct` or `media=relay`, so
+you can see which path a call used.
 
 `ICE_SERVERS_JSON=[]` (the default) worked in the tested handset call, where the server ran
 directly on a machine whose network allowed direct media. Do not assume it works on yours.
 
-## 4. Create the agent (ElevenLabs)
+## 4. Create the agent (ElevenLabs only)
 
 Do this before you start the server: the server reads `.env` once, when it starts. Skip `apply`
 if you already created the agent in README step 1 and copied its ID into this `.env`.
@@ -116,7 +129,7 @@ reach the same instance that owns a call's media. To scale out you would need sh
 state and sticky routing by call ID; that is not implemented.
 
 Browser check on the host: open `https://<host>/operator/` (over your VPN or SSH tunnel, see
-`docs/security.md`), paste the operator token, select **Start browser call**. Your browser needs
+`docs/security.md`), sign in with the console access key, select **Start test call**. Your browser needs
 a media path to the server too, so a browser call that works here is a good sign for WhatsApp
 media, not a proof.
 
@@ -125,7 +138,8 @@ media, not a proof.
 1. Enable Calling on the number in the Kapso dashboard (**Phone numbers → Enable calls**) and
    confirm Meta reports it enabled. This starter does not automate that step.
 2. In the dashboard, check whether a voice agent is already assigned to the number. Decide which
-   one answers: the dashboard agent or this server. Not both.
+   one answers: the dashboard agent, the Inbox or this server. Run `voice-agent sip status`: if it
+   shows SIP, Meta sends the calls to that SIP server and this server receives none.
 3. Register this server as the number's Meta webhook:
 
 ```sh
@@ -144,8 +158,8 @@ the number also receives messages, route those elsewhere first.
    posts it to `/webhooks/whatsapp`. Unsigned or wrongly signed requests get 401.
 2. The server reads the agent's recording setting (it sends `reject` if it cannot), builds the WebRTC
    answer, and sends `pre_accept`, then `accept`, through Kapso's call API.
-3. Only after `accept` does the Riley session start, so the greeting is never spoken into a call
-   that is not connected.
+3. Only after `accept` does the Riley session start, and the greeting waits until the call's audio
+   is connected.
 4. The call ends when Riley uses `end_call` (the server sends `terminate`), when the caller hangs
    up (Meta's `terminate` webhook), or at `MAX_SESSION_SECONDS`.
 

@@ -1,12 +1,13 @@
 """`voice-agent` command line. Run `voice-agent --help`.
 
-Start here: `voice-agent init` writes a private .env with fresh local secrets.
+Start here: `voice-agent init` writes a private .env with fresh local secrets, and
+`voice-agent console-key` copies the key that opens the operator console.
 
-Offline commands (no network, no credentials): init, check, agent plan, tools schema,
-tools call (with CALENDAR=local), kapso webhook (without --yes), artifacts prune, dev fake-agent,
+Offline commands (no network, no credentials): setup, init, console-key, export-env, check, agent plan, tools schema,
+tools call (with CALENDAR=local), kapso webhook (without --yes), sip plan, artifacts prune, dev fake-agent,
 dev init-env, secrets.
-Network commands (operator only): serve, agent apply --yes, agent verify, kapso webhook --yes,
-artifacts fetch, calendar check (read-only), tools call (with Cal.com; writes need --yes).
+Network commands (operator only): serve, agent apply --yes, agent verify, kapso webhook --yes, railway variables --yes,
+artifacts fetch, calendar check (read-only), sip status (read-only), tools call (with Cal.com; writes need --yes).
 """
 
 import argparse
@@ -83,6 +84,7 @@ def cmd_check(args):
     if config["conversation_config"]["turn"]["soft_timeout_config"]["timeout_seconds"] != -1:
         problems.append("The soft-timeout filler is enabled")
     report = {
+        "voice_provider": voice_label(settings, spec),
         "agent_name": spec.name, "voice_id": spec.raw["voice"]["voice_id"],
         # Offline, so this is intent only. At call time the server reads the stored agent's
         # record_voice back and picks the greeting from that (see recording.py).
@@ -102,6 +104,7 @@ def cmd_check(args):
                                      "WHATSAPP_WEBHOOK_SECRET": settings.webhook_secret,
                                      "ELEVENLABS_API_KEY": settings.elevenlabs_api_key,
                                      "ELEVENLABS_AGENT_ID": settings.elevenlabs_agent_id,
+                                     "XAI_API_KEY": settings.xai_api_key,
                                      "OPERATOR_TOKEN": settings.operator_token,
                                      "CALLER_KEY_SECRET": settings.caller_key_secret}.items() if v),
         "problems": problems,
@@ -239,6 +242,40 @@ def cmd_kapso_webhook(args):
         fail(str(error))
 
 
+def cmd_sip_status(args):
+    """Read-only: who answers this number's calls (Calling API or SIP). Never reads the SIP password."""
+    import asyncio
+
+    from .kapso import KapsoClient, KapsoError
+    from .sip import status_lines
+    settings, _ = context(args)
+    if not (settings.kapso_api_key and settings.phone_number_id):
+        fail("Set KAPSO_API_KEY and WHATSAPP_PHONE_NUMBER_ID in the env file first")
+
+    async def read():
+        client = KapsoClient(settings.kapso_api_key, settings.phone_number_id, settings.meta_graph_version)
+        try:
+            return await client.calling_settings()
+        finally:
+            await client.close()
+    try:
+        calling = asyncio.run(read())
+    except KapsoError as error:
+        fail(f"Could not read the number's calling settings: {error}")
+    print(f"Phone number ID {settings.phone_number_id}:")
+    for line in status_lines(calling):
+        print("  " + line)
+
+
+def cmd_sip_plan(args):
+    from .sip import SipPlanError, plan
+    settings, _ = context(args)
+    try:
+        print(plan(args.provider, args.number, settings.phone_number_id, settings.meta_graph_version, args.control_url))
+    except SipPlanError as error:
+        fail(str(error))
+
+
 WRITE_TOOLS = ("book_appointment", "reschedule_appointment", "cancel_appointment")
 
 
@@ -335,17 +372,27 @@ def cmd_artifacts_prune(args):
                       "scope": "local copies only; provider and Meta copies follow their own retention"}, indent=2))
 
 
-def serve_banner(settings, host, port, env_label):
+def voice_label(settings, spec):
+    """The provider a call talks to, for people. Names only, never a key."""
+    if settings.voice_provider == "grok":
+        return f"Grok Voice ({spec.grok['model']}, voice {spec.grok['voice']})"
+    return "ElevenLabs Agents"
+
+
+def serve_banner(settings, host, port, env_label, spec=None, key_command="voice-agent console-key"):
     """What `serve` prints at startup: where to go and what is missing. Never a secret value."""
     local = {"0.0.0.0": "127.0.0.1", "": "127.0.0.1", "::": "[::1]"}.get(host, f"[{host}]" if ":" in host else host)
     base = f"http://{local}:{port}"
     lines = [f"Voice agent server on {base} (env: {env_label})"]
     if settings.operator_enabled:
-        lines.append(f"Operator console: {base}/operator/  (paste OPERATOR_TOKEN from {env_label})")
+        lines.append(f"Operator console: {base}/operator/  (sign in with the console access key: "
+                     f"`{key_command}` copies it)")
     else:
         lines.append("Operator console: off (set OPERATOR_TOKEN, or run `voice-agent init`)")
     if settings.dev_agent_ws_url:
         lines.append("Agent: offline fake agent (development only: a tone and an echo, not a conversation)")
+    elif spec:
+        lines.append("Voice: " + voice_label(settings, spec))
     if settings.calendar == "calcom":
         lines.append("Calendar: Cal.com (real availability and bookings)")
     elif settings.calendar == "local":
@@ -375,13 +422,14 @@ def cmd_serve(args):
         fail(str(error))
     path = env_path(args)
     label = shown_path(path) if path.is_file() else "process environment only"
-    print("\n".join(serve_banner(settings, args.host, args.port, label)), flush=True)
+    key_command = "voice-agent" + (f" --env-file {shown_path(path)}" if args.env_file else "") + " console-key"
+    print("\n".join(serve_banner(settings, args.host, args.port, label, spec, key_command)), flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning", proxy_headers=False)
 
 
 def cmd_fake_agent(args):
     from .fake_agent import main
-    main(args.port)
+    main(args.port, args.provider)
 
 
 DEV_ENV_TEMPLATE = """# Local offline development only (fake agent, no accounts). Never use these values in production.
@@ -390,19 +438,20 @@ CALLER_KEY_SECRET={caller_key_secret}
 DEV_AGENT_WS_URL=ws://127.0.0.1:{port}
 # Offline development calendar (agent/dev-calendar.json); bookings stay in DATA_DIR only.
 CALENDAR=local
+VOICE_PROVIDER={provider}
 """
 
 
 def cmd_init_env(args):
     path = Path(args.path)
-    values = {"operator_token": secrets.token_urlsafe(32), "caller_key_secret": secrets.token_hex(32), "port": args.port}
+    values = {"operator_token": secrets.token_urlsafe(32), "caller_key_secret": secrets.token_hex(32), "port": args.port,
+              "provider": args.provider}
     try:
         write_new_private_file(path, DEV_ENV_TEMPLATE.format(**values))
     except FileExistsError:
-        fail(f"{path} already exists; reuse it (grep OPERATOR_TOKEN {path}) or delete it first")
-    print(f"Wrote {path} (0600).")
-    print(f"Operator token (paste it into the console): {values['operator_token']}")
-    print(f"Show it again later: grep OPERATOR_TOKEN {path}")
+        fail(f"{path} already exists; reuse it or delete it first")
+    print(f"Wrote {path} (0600) for the offline fake {args.provider} agent.")
+    print(f"Console access key: run `voice-agent --env-file {path} console-key` to copy it.")
 
 
 ENV_HEADER = """# Created by `voice-agent init`. Private (0600): never commit or share it.
@@ -436,11 +485,65 @@ def cmd_init(args):
     except (OSError, ValueError) as error:
         fail(str(error))
     print(f"Wrote {shown_path(path)} (0600) with a new " + ", ".join(GENERATED) + ".")
-    print(f"Operator token (paste it into the console): {values['OPERATOR_TOKEN']}")
-    print(f"Show it again later: grep OPERATOR_TOKEN {shown_path(path)}")
-    print("Next: put your ElevenLabs and Cal.com API keys in ELEVENLABS_API_KEY and CAL_API_KEY, fill in "
-          "agent/business.json, run `uv run voice-agent calendar check`, then "
-          "`uv run voice-agent agent apply --yes --save-agent-id`.")
+    command = "voice-agent" + (f" --env-file {shown_path(path)}" if args.env_file else "")
+    print(f"Console access key: run `{command} console-key` to copy it. It opens the operator console; "
+          "it is not a provider API key.")
+    print("Next: run `uv run voice-agent setup` to choose a voice provider and calendar. Or edit the file: "
+          "for ElevenLabs set ELEVENLABS_API_KEY (for Grok Voice, VOICE_PROVIDER=grok and XAI_API_KEY), set "
+          "CAL_API_KEY and fill in agent/business.json, run `uv run voice-agent calendar check`, then with "
+          "ElevenLabs `uv run voice-agent agent apply --yes --save-agent-id`.")
+
+
+def cmd_setup(args):
+    from .setup_wizard import SetupError, default_path, run
+    path = default_path(args.env_file)
+    command = "uv run voice-agent" + (f" --env-file {shown_path(path)}" if args.env_file else "")
+    try:
+        run(path, command, provider=args.provider, calendar=args.calendar, host=args.host,
+            whatsapp=args.whatsapp or None, interactive=not args.no_input)
+    except SetupError as error:
+        fail(str(error))
+    except (EOFError, KeyboardInterrupt):
+        fail("Setup stopped; nothing more was written")
+
+
+def cmd_export_env(args):
+    from .setup_wizard import SetupError, default_path, export_env
+    try:
+        export_env(default_path(args.env_file), args.target, show=args.show, file=args.file)
+    except SetupError as error:
+        fail(str(error))
+
+
+def cmd_railway_variables(args):
+    from .setup_wizard import SetupError, default_path, railway_variables
+    try:
+        railway_variables(default_path(args.env_file), yes=args.yes)
+    except SetupError as error:
+        fail(str(error))
+
+
+def cmd_console_key(args):
+    """Copy OPERATOR_TOKEN (the console access key) to the clipboard, or print it with --show.
+    It is a key for this server's console, not for Kapso, ElevenLabs or xAI."""
+    try:
+        settings = load_settings(env_file=args.env_file)
+    except ConfigError as error:
+        fail(str(error))
+    path = env_path(args)
+    source = shown_path(path) if path.is_file() else "the process environment"
+    if not settings.operator_enabled:
+        fail(f"OPERATOR_TOKEN is not set in {source}; `voice-agent init` creates one")
+    if args.show:
+        print(settings.operator_token)
+        return
+    from .setup_wizard import copy_to_clipboard
+    if copy_to_clipboard(settings.operator_token):
+        print(f"Copied the console access key (OPERATOR_TOKEN in {source}) to the clipboard. "
+              "Paste it into the console's sign-in field.")
+        return
+    fail("No clipboard tool found (pbcopy, wl-copy, xclip). In a private terminal, run "
+         "`voice-agent console-key --show` to print it")
 
 
 def cmd_secrets(args):
@@ -458,10 +561,30 @@ def parser():
     commands.add_parser("init", help="Write a private .env (or --env-file) with fresh local secrets; never overwrites").set_defaults(
         func=cmd_init)
     commands.add_parser("check", help="Validate config, prompt, greetings and tool behavior offline").set_defaults(func=cmd_check)
+    setup = commands.add_parser("setup", help="Guided setup: voice provider, calendar and host; writes the env file")
+    setup.add_argument("--provider", choices=("elevenlabs", "grok"))
+    setup.add_argument("--calendar", choices=("calcom", "local"))
+    setup.add_argument("--host", choices=("local", "vps", "railway"))
+    setup.add_argument("--whatsapp", action="store_true", help="Also ask for the Kapso and WhatsApp settings")
+    setup.add_argument("--no-input", action="store_true", help="Do not ask anything; use the flags and existing values")
+    setup.set_defaults(func=cmd_setup)
+    export = commands.add_parser("export-env", help="Copy the server's variables for a host's variable editor or secret store")
+    export.add_argument("--for", dest="target", choices=("railway", "vps", "pipecat-cloud"), required=True)
+    export.add_argument("--show", action="store_true", help="Print them instead of copying (they contain secrets)")
+    export.add_argument("--file", help="Write them to this new file (0600) instead, for `pipecat cloud secrets set --file`")
+    export.set_defaults(func=cmd_export_env)
+    railway = commands.add_parser("railway", help="Railway helpers").add_subparsers(dest="railway_command", required=True)
+    push = railway.add_parser("variables", help="Set the server's variables on the linked Railway service (dry run unless --yes)")
+    push.add_argument("--yes", action="store_true", help="Really set them (values go through stdin)")
+    push.set_defaults(func=cmd_railway_variables)
+    key = commands.add_parser("console-key", help="Copy the operator console access key (OPERATOR_TOKEN) to the clipboard")
+    key.add_argument("--show", action="store_true", help="Print it instead (it stays in your terminal history)")
+    key.set_defaults(func=cmd_console_key)
 
     serve = commands.add_parser("serve", help="Run the webhook receiver, bridge and operator console")
     serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8080)
+    serve.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8080),
+                       help="Default: $PORT (set by hosts such as Railway), else 8080")
     serve.set_defaults(func=cmd_serve)
 
     agent = commands.add_parser("agent", help="ElevenLabs agent config").add_subparsers(dest="agent_command", required=True)
@@ -482,6 +605,15 @@ def parser():
     webhook.add_argument("--yes", action="store_true", help="Really create it (refuses if one exists)")
     webhook.set_defaults(func=cmd_kapso_webhook)
 
+    sip = commands.add_parser("sip", help="Provider-hosted SIP for the number (read-only status, offline plan)").add_subparsers(
+        dest="sip_command", required=True)
+    sip.add_parser("status", help="Read who answers the number's calls: Calling API or SIP (read-only)").set_defaults(
+        func=cmd_sip_status)
+    sip_plan = sip.add_parser("plan", help="Print the SIP setup and undo requests for a provider (offline; applies nothing)")
+    sip_plan.add_argument("--provider", choices=("elevenlabs", "xai"), required=True)
+    sip_plan.add_argument("--number", required=True, help="WhatsApp business number in E.164 form, e.g. +15550100000")
+    sip_plan.add_argument("--control-url", help="xAI only: public https://.../webhooks/xai-sip URL of this server")
+    sip_plan.set_defaults(func=cmd_sip_plan)
     tools = commands.add_parser("tools", help="Inspect and exercise tools offline").add_subparsers(dest="tools_command", required=True)
     tools.add_parser("schema", help="Print tool definitions sent to the provider").set_defaults(func=cmd_tools_schema)
     call = tools.add_parser("call", help="Run one tool against the configured calendar (Cal.com, or the local development one)")
@@ -509,10 +641,13 @@ def parser():
     dev = commands.add_parser("dev", help="Offline development helpers").add_subparsers(dest="dev_command", required=True)
     fake = dev.add_parser("fake-agent", help="Run the offline fake agent WebSocket")
     fake.add_argument("--port", type=int, default=8765)
+    fake.add_argument("--provider", choices=("elevenlabs", "grok"), default="elevenlabs", help="Protocol to speak")
     fake.set_defaults(func=cmd_fake_agent)
     init_env = dev.add_parser("init-env", help="Write a private .env.dev for the offline fake agent (development only)")
     init_env.add_argument("--path", default=".env.dev")
     init_env.add_argument("--port", type=int, default=8765, help="Fake agent port")
+    init_env.add_argument("--provider", choices=("elevenlabs", "grok"), default="elevenlabs",
+                          help="VOICE_PROVIDER for the env file and the fake agent's protocol")
     init_env.set_defaults(func=cmd_init_env)
 
     commands.add_parser("secrets", help="Print fresh random secrets for .env (local only)").set_defaults(func=cmd_secrets)

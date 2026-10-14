@@ -44,6 +44,19 @@ class KapsoClient:
             raise KapsoError(f"Kapso did not confirm the {action} action")
         return result
 
+    async def find_call(self, call_id):
+        """Kapso's saved record for one Meta call ID on this number, or None. Read-only."""
+        result = await self.request("GET", self.calls_path() + "?" + urlencode({"call_id": call_id, "limit": 1}))
+        rows = result.get("data")
+        if not isinstance(rows, list) or len(rows) > 1:
+            raise KapsoError("Kapso returned an unexpected call list")
+        return rows[0] if rows and isinstance(rows[0], dict) else None
+
+    async def calling_settings(self):
+        """The number's calling settings, read-only. Never asks for SIP credentials."""
+        result = await self.request("GET", self.calls_path("settings"))
+        return result.get("calling") if isinstance(result.get("calling"), dict) else {}
+
     async def permissions(self, recipient):
         key = "recipient" if recipient.startswith("US.") else "user_wa_id"
         return await self.request("GET", self.calls_path("call_permissions") + "?" + urlencode({key: recipient}))

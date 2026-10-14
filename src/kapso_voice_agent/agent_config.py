@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import tomllib
 
 from .business import Business
@@ -38,6 +39,11 @@ class AgentSpec:
         return bool(self.raw["privacy"]["record_audio"])
 
     @property
+    def grok(self):
+        """[grok] settings for VOICE_PROVIDER=grok, with defaults when the section is absent."""
+        return {**GROK_DEFAULTS, **self.raw.get("grok", {})}
+
+    @property
     def max_duration_seconds(self):
         return int(self.raw["limits"]["max_duration_seconds"])
 
@@ -72,6 +78,9 @@ REQUIRED = {
 # Words that make the agent narrate tool use or fill silence. The starter keeps them out of
 # greetings and the prompt's instructions; `voice-agent check` enforces it.
 FILLER_PHRASES = ("one second", "one moment", "hold on", "bear with me", "just a sec")
+GROK_DEFAULTS = {"model": "grok-voice-3.0", "voice": "eve"}
+GROK_MODEL = re.compile(r"^grok-voice-[a-z0-9][a-z0-9.-]{0,30}$")
+VOICE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def load_spec(path):
@@ -82,6 +91,13 @@ def load_spec(path):
     if missing:
         raise ValueError("agent.toml is missing: " + ", ".join(missing))
     spec = AgentSpec(raw, path.parent)
+    unknown = set(raw.get("grok", {})) - set(GROK_DEFAULTS)
+    if unknown:
+        raise ValueError("agent.toml [grok] has unknown keys: " + ", ".join(sorted(unknown)))
+    if not GROK_MODEL.match(str(spec.grok["model"])):
+        raise ValueError("agent.toml grok.model must be an xAI voice model such as grok-voice-3.0")
+    if not VOICE_ID.match(str(spec.grok["voice"])):
+        raise ValueError("agent.toml grok.voice must be a voice ID such as eve")
     if not spec.prompt.strip():
         raise ValueError("The prompt file is empty")
     for direction in ("inbound", "outbound"):

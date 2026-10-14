@@ -150,7 +150,8 @@ class TestInit:
         printed = capsys.readouterr().out
         settings = load_settings(env_file=path)
         assert mode(path) == "0o600"
-        assert settings.operator_enabled and settings.operator_token in printed
+        # The console access key stays out of terminal output; `console-key` copies it on request.
+        assert settings.operator_enabled and settings.operator_token not in printed and "console-key" in printed
         assert len(settings.caller_key_secret) == len(settings.webhook_secret) == 64
         assert len({settings.operator_token, settings.caller_key_secret, settings.webhook_secret}) == 3
         assert settings.caller_key_secret not in printed and settings.webhook_secret not in printed

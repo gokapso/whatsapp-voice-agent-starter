@@ -3,10 +3,12 @@
 Public (expose through your HTTPS ingress):
   GET  /healthz              -> {"ok": true}; no configuration details
   POST /webhooks/whatsapp    -> Kapso-signed Meta Calling webhook (raw-body HMAC, 1 MB cap)
+  POST /webhooks/xai-sip     -> xAI Direct SIP incoming call (Standard Webhooks signature); 404 unless
+                                XAI_SIP_WEBHOOK_SECRET is set (xai_sip.py)
 
 Operator (bearer OPERATOR_TOKEN; returns 404 when the token is unset):
   GET  /operator/                         console page (contains no secrets)
-  GET  /operator/api/state                readiness, recording state, active calls, event log, artifact notices
+  GET  /operator/api/state                readiness, voice provider, recording state, active calls, event log, artifact notices
   POST /operator/api/browser-call         {sdp} -> SDP answer; test the agent from a browser
   POST /operator/api/calls/{ref}/hangup   end a browser or outbound call
   POST /operator/api/outbound/permission  {recipient} (needs ENABLE_OUTBOUND=1)
@@ -34,6 +36,8 @@ from .events import EventLog
 from .outbound import OutboundError
 from .private import private_dir, prune_local_artifacts
 from .recording import RecordingUnknown
+from .turn import TurnUnavailable
+from .xai_sip import SipCalls, incoming_call, verify_standard_webhook
 
 STATIC = Path(__file__).parent / "static"
 MAX_WEBHOOK_BYTES = 1_000_000
@@ -63,6 +67,19 @@ def verify_signature(secret, raw, header):
         return False
     expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, header.lower())
+
+
+async def read_capped(request):
+    """The raw request body, refused above MAX_WEBHOOK_BYTES before it is all read."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(413, "Webhook too large")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > MAX_WEBHOOK_BYTES:
+            raise HTTPException(413, "Webhook too large")
+    return bytes(raw)
 
 
 def prune_once(settings, log):
@@ -105,6 +122,7 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     manager = CallManager(settings, spec, store, log, session_factory=session_factory,
                           connection_factory=connection_factory, kapso_factory=kapso_factory,
                           recording_reader=recording_reader)
+    sip_calls = SipCalls(settings, spec, store, log)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -117,9 +135,11 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             pruner.cancel()
             await asyncio.gather(pruner, return_exceptions=True)
             await manager.shutdown()
+            await sip_calls.shutdown()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager, app.state.log, app.state.settings = manager, log, settings
+    app.state.sip_calls = sip_calls
     if settings.allowed_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
@@ -131,16 +151,9 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     async def webhook(request: Request):
         if not settings.webhook_secret:
             raise HTTPException(503, "Webhook secret is not configured")
-        declared = request.headers.get("content-length", "")
-        if declared.isdigit() and int(declared) > MAX_WEBHOOK_BYTES:
-            raise HTTPException(413, "Webhook too large")
-        raw = bytearray()
-        async for chunk in request.stream():
-            raw.extend(chunk)
-            if len(raw) > MAX_WEBHOOK_BYTES:
-                raise HTTPException(413, "Webhook too large")
+        raw = await read_capped(request)
         # Verify the exact bytes before parsing anything.
-        if not verify_signature(settings.webhook_secret, bytes(raw), request.headers.get("x-webhook-signature")):
+        if not verify_signature(settings.webhook_secret, raw, request.headers.get("x-webhook-signature")):
             raise HTTPException(401, "Invalid signature")
         try:
             payload = json.loads(raw)
@@ -154,6 +167,23 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             # Kapso will retry; the call keeps ringing until then or until the caller gives up.
             raise HTTPException(503, "Server is not configured to answer calls") from None
         return counts
+
+    @app.post("/webhooks/xai-sip")
+    async def xai_sip_webhook(request: Request):
+        if not settings.xai_sip_webhook_secret:
+            raise HTTPException(404)
+        raw = await read_capped(request)
+        if not verify_standard_webhook(settings.xai_sip_webhook_secret, request.headers, raw):
+            raise HTTPException(401, "Invalid signature")
+        try:
+            call = incoming_call(json.loads(raw))
+        except ValueError:
+            raise HTTPException(400, "Body is not JSON") from None
+        if call is None:
+            return {"ignored": True}
+        if not settings.xai_sip_ready:
+            raise HTTPException(503, "Server is not configured to control xAI SIP calls")
+        return {"call": sip_calls.start(*call, manager.caller_key)}
 
     def operator(request: Request):
         if not settings.operator_enabled:
@@ -183,10 +213,18 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
 
     api = APIRouter(prefix="/operator/api", dependencies=[Depends(operator)])
 
+    def voice_status():
+        """Which provider a browser call would talk to. Names only; never a key."""
+        grok = settings.voice_provider == "grok"
+        return {"provider": settings.voice_provider, "label": "Grok Voice" if grok else "ElevenLabs Agents",
+                "model": spec.grok["model"] if grok else None, "voice": spec.grok["voice"] if grok else None,
+                "offline_fake_agent": bool(settings.dev_agent_ws_url), "problem": log.provider_problem}
+
     @api.get("/state")
     async def state():
         return {"calls_ready": settings.calls_ready, "agent_ready": settings.agent_ready,
                 "agent_missing": settings.agent_missing(),  # setting names only, never values
+                "voice": voice_status(), "calendar": settings.calendar or None,
                 "outbound_enabled": settings.enable_outbound, "local_capture": settings.local_capture,
                 "recording": manager.recording.status(),
                 "max_concurrent_calls": settings.max_concurrent_calls, "busy": manager.busy(),
@@ -201,6 +239,10 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             ref, answer = await manager.start_browser_call(offer.sdp)
         except RecordingUnknown:
             raise HTTPException(503, "Could not read the agent's recording setting; no call started") from None
+        except TurnUnavailable:
+            log.add("turn_credentials_failed")
+            raise HTTPException(503, "Could not get TURN relay credentials; no call started. "
+                                     "Check CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN") from None
         except RuntimeError as error:
             if str(error) == "busy":
                 raise HTTPException(409, "Already at MAX_CONCURRENT_CALLS") from None

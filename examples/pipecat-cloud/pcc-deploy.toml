@@ -1,0 +1,9 @@
+# `pipecat cloud deploy` settings. Kapso's dashboard Pipecat provider starts sessions for this
+# agent name. Build the image from the repository root (see Dockerfile).
+agent_name = "kapso-voice-agent"
+image = "YOUR_REGISTRY/kapso-voice-agent-cloud:0.1.0"
+secret_set = "kapso-voice-secrets"
+
+[scaling]
+	# One warm instance answers the first call without a cold start. Each instance runs one call.
+	min_agents = 1

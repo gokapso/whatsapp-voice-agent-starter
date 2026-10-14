@@ -80,7 +80,7 @@ def before_elevenlabs_key(temp, env):
         [banner] = stop([server])
     report = json.loads(check.stdout)
     return {
-        "init_exit": init.returncode, "init_printed_token": token in init.stdout,
+        "init_exit": init.returncode, "init_hides_token": token not in init.stdout,
         "init_refuses_existing_file": again.returncode != 0, "env_file_mode": mode(env_file),
         "check_exit": check.returncode, "check_missing": report["agent_missing"],
         "banner": banner.strip().splitlines(), "banner_has_no_secret": not any(s in banner for s in secrets),
@@ -105,7 +105,7 @@ def fake_agent_browser_call(temp, env):
     finally:
         _, banner = stop(processes)
     return {
-        "token_printed_by_init_env": token in init.stdout, "env_file_mode": mode(env_file),
+        "init_env_hides_token": token not in init.stdout, "env_file_mode": mode(env_file),
         "banner_says_fake_agent": "offline fake agent" in banner, "banner_has_no_secret": token not in banner,
         "agent_ready": state["agent_ready"], "calls_ready": state["calls_ready"], "recording": state["recording"],
         "browser_call": call, "data_dir_mode": mode(temp / "data"), "store_mode": mode(temp / "data" / "appointments.sqlite3"),
@@ -119,7 +119,7 @@ def main():
                "LOGURU_LEVEL": "WARNING"}
         real = before_elevenlabs_key(temp, env)
         dev = fake_agent_browser_call(temp, env)
-    real_ok = (real["init_exit"] == 0 and real["init_printed_token"] and real["init_refuses_existing_file"]
+    real_ok = (real["init_exit"] == 0 and real["init_hides_token"] and real["init_refuses_existing_file"]
                and real["env_file_mode"] == "0o600" and real["check_exit"] == 0
                and real["check_missing"] == ["ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID (or DEV_AGENT_WS_URL)",
                                              "CAL_API_KEY (or CALENDAR=local for offline development)"]
@@ -127,7 +127,7 @@ def main():
                and real["banner_has_no_secret"] and real["agent_ready"] is False
                and real["browser_call_status"] == 503 and "ELEVENLABS_API_KEY" in real["browser_call_detail"])
     call = dev["browser_call"]
-    dev_ok = (dev["token_printed_by_init_env"] and dev["env_file_mode"] == "0o600" and dev["banner_says_fake_agent"]
+    dev_ok = (dev["init_env_hides_token"] and dev["env_file_mode"] == "0o600" and dev["banner_says_fake_agent"]
               and dev["banner_has_no_secret"] and dev["agent_ready"] and not dev["calls_ready"]
               and dev["recording"]["provider_recording"] == "off (offline fake agent)"
               and dev["recording"]["next_greeting_says_recorded"] is False

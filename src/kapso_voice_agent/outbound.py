@@ -16,6 +16,7 @@ from .bridge import meta_sdp
 from .events import call_ref
 from .kapso import KapsoError
 from .recording import RecordingUnknown
+from .turn import TurnUnavailable
 
 RING_TIMEOUT_SECONDS = 90
 EARLY_EVENT_LIMIT = 16
@@ -94,7 +95,7 @@ class OutboundCalls:
         manager = self.manager
         recipient = normalize_recipient(recipient)
         if not manager.settings.calls_ready:
-            raise OutboundError(503, "Configure Kapso, the webhook secret and the ElevenLabs agent first")
+            raise OutboundError(503, "Configure Kapso, the webhook secret and the voice agent first")
         try:
             # Before dialing: the greeting must state the real recording setting.
             recording = await manager.recording.current()
@@ -109,7 +110,7 @@ class OutboundCalls:
         try:
             if not can_start_call(await client.permissions(recipient)):
                 raise OutboundError(409, "WhatsApp has not allowed this call. The person must grant calling permission first.")
-            connection = manager.connection_factory(manager.settings.ice_servers_json)
+            connection = manager.connection_factory(await manager.ice_factory(manager.settings))
             connection.pc.addTransceiver("audio", direction="sendrecv")
             await connection.pc.setLocalDescription(await connection.pc.createOffer())
             try:
@@ -145,6 +146,10 @@ class OutboundCalls:
             return {"ref": ref, "state": "ringing"}
         except KapsoError as error:
             raise OutboundError(502, str(error)) from None
+        except TurnUnavailable:
+            manager.log.add("turn_credentials_failed")
+            raise OutboundError(503, "Could not get TURN relay credentials; not dialing. "
+                                     "Check CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN.") from None
         finally:
             async with manager.lock:
                 self.dialing = False

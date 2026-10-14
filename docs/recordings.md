@@ -4,6 +4,7 @@ They are produced by different systems, stored in different places and are not i
 
 | Source | Default here | What you get | Where it lives | Retention |
 | --- | --- | --- | --- | --- |
+| **xAI** (Grok Voice provider) | Always (xAI keeps API requests and responses 30 days unless your team has Zero Data Retention) | Nothing this starter can download | xAI | 30 days at xAI ([security FAQ](https://docs.x.ai/docs/resources/faq-api/security)) |
 | **ElevenLabs** (provider) | **On** (`privacy.record_audio = true`) | Original call MP3 + conversation JSON (provider transcript, tool calls) | ElevenLabs; download with `voice-agent artifacts fetch` | `privacy.retention_days` (7) at the provider; local copies pruned by `CAPTURE_RETENTION_DAYS` |
 | **Local bridge capture** | Off (`LOCAL_CAPTURE=0`) | `caller.wav`, `agent.wav`, stereo WAV (16 kHz, aligned), `turns.json`, `manifest.json` | `DATA_DIR/captures/` on this server, 0600/0700 | `CAPTURE_RETENTION_DAYS`, `CAPTURE_MAX_COUNT` (local, best effort) |
 | **Meta native** | **Not requested** | Meta recording (audio) and/or transcript | Meta; Kapso stores metadata and fetches on request | About 7 days at Meta |
@@ -22,6 +23,9 @@ The greeting is built per call from the **effective** settings, not from `agent.
 - If the setting cannot be read (network error, HTTP error, field missing), no session starts:
   inbound calls get `reject`, browser and outbound calls get HTTP 503. The server never guesses.
 - The offline fake agent records nothing. It is never read over the network.
+- Grok Voice (`VOICE_PROVIDER=grok`) has no stored agent to read. xAI stores API traffic for 30
+  days by default and does not persist voice agent conversations only for Zero Data Retention
+  teams, which this server cannot check. So Grok calls always say "This call is recorded."
 - `/operator/api/state` → `recording` shows the last read (`on`, `off`, `unknown`,
   `not_checked`). `not_checked` with no `last_check_error` is normal on an idle server: the
   60-second answer has expired and the next call reads again. To confirm the stored setting
