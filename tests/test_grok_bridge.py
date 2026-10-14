@@ -61,7 +61,13 @@ def offline_bridge(grok, spec, store, recorded=True):
     recording = type("R", (), {"recorded": recorded})()
     context = session_context(grok, spec, store, "inbound", recording)
     clock = Clock()
-    bridge = GrokAgentBridge(context, store, "caller-key", EventLog(), "browser-0123456789abcdef", clock=clock)
+    sleeps = []
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+        clock.now += seconds
+    bridge = GrokAgentBridge(context, store, "caller-key", EventLog(), "browser-0123456789abcdef", clock=clock, sleep=sleep)
+    bridge.sleeps = sleeps
     bridge.websocket = FakeSocket()
     bridge.pushed, bridge.interruptions = [], []
 
@@ -128,13 +134,17 @@ class TestSessionConfig:
 
 
 class TestProtocol:
-    def test_greeting_is_a_non_interruptible_force_message_after_session_updated(self, grok, spec, store):
+    def test_greeting_is_a_non_interruptible_force_message_once_session_and_media_are_ready(self, grok, spec, store):
         async def go():
             bridge, _ = offline_bridge(grok, spec, store)
             await bridge.handle_event({"type": "conversation.created", "conversation": {"id": "conv_1"}})
             assert bridge.websocket.sent[-1]["type"] == "session.update" and not bridge.ready.is_set()
             await bridge.handle_event({"type": "session.updated", "session": {}})
+            # The caller's media is not connected yet: the transport would drop the disclosure.
+            assert [m["type"] for m in bridge.websocket.sent] == ["session.update"]
+            await bridge.media_ready()
             await bridge.handle_event({"type": "session.updated", "session": {}})  # an echo later on never re-greets
+            await bridge.media_ready()
             return bridge
         bridge = asyncio.run(go())
         greetings = [m for m in bridge.websocket.sent if m["type"] == "conversation.item.create"]
@@ -148,6 +158,7 @@ class TestProtocol:
     def test_barge_in_drops_queued_agent_audio_but_never_cuts_the_disclosure(self, grok, spec, store):
         async def go():
             bridge, clock = offline_bridge(grok, spec, store)
+            await bridge.media_ready()
             await bridge.handle_event({"type": "session.updated"})
             await bridge.handle_event({"type": "response.created", "response": {"id": "greeting"}})
             await bridge.handle_event({"type": "response.output_audio.delta", "response_id": "greeting", "delta": b64(SECOND)})
@@ -168,6 +179,23 @@ class TestProtocol:
         assert len(bridge.pushed) == 3  # greeting, the answer before the barge-in, the next response; not the stale chunk
         assert all(frame.sample_rate == 16000 and frame.num_channels == 1 for frame in bridge.pushed)
         assert [e["event"] for e in bridge.log.events].count("agent_interrupted") == 1
+
+    def test_disclosure_stays_protected_through_a_pause_in_its_audio(self, grok, spec, store):
+        async def go():
+            bridge, clock = offline_bridge(grok, spec, store)
+            await bridge.handle_event({"type": "session.updated"})
+            await bridge.handle_event({"type": "input_audio_buffer.speech_started"})  # before media: protected
+            await bridge.media_ready()
+            await bridge.handle_event({"type": "response.created", "response": {"id": "greeting"}})
+            await bridge.handle_event({"type": "response.output_audio.delta", "response_id": "greeting",
+                                       "delta": b64(SECOND[:3200])})
+            clock.now += 3  # the provider pauses longer than the audio sent so far
+            await bridge.handle_event({"type": "input_audio_buffer.speech_started"})
+            await bridge.handle_event({"type": "response.output_audio.delta", "response_id": "greeting",
+                                       "delta": b64(SECOND[:3200])})
+            return bridge
+        bridge = asyncio.run(go())
+        assert bridge.interruptions == [] and len(bridge.pushed) == 2 and "greeting" not in bridge.dropped
 
     def test_tool_results_go_back_once_then_one_response_create(self, grok, spec, store):
         slots = {"type": "response.function_call_arguments.done", "call_id": "call_1", "name": "available_slots",
@@ -212,9 +240,11 @@ class TestProtocol:
         assert garbage["code"] == "invalid_arguments"
         assert len(store.list_own("caller-key")["appointments"]) == 1
 
-    def test_end_call_closes_after_the_goodbye_response(self, grok, spec, store):
+    def test_end_call_closes_after_the_goodbye_has_played(self, grok, spec, store):
         async def go():
             bridge, _ = offline_bridge(grok, spec, store)
+            await bridge.handle_event({"type": "response.created", "response": {"id": "r9"}})
+            await bridge.handle_event({"type": "response.output_audio.delta", "response_id": "r9", "delta": b64(SECOND * 2)})
             await bridge.handle_event({"type": "response.function_call_arguments.done", "call_id": "bye",
                                        "name": "end_call", "arguments": "{}"})
             assert not bridge.websocket.closed
@@ -222,6 +252,7 @@ class TestProtocol:
             return bridge
         bridge = asyncio.run(go())
         assert bridge.websocket.closed and "response.create" not in [m["type"] for m in bridge.websocket.sent]
+        assert bridge.sleeps == [pytest.approx(2.3)]  # two seconds of goodbye audio, plus a margin, before closing
 
     @pytest.mark.parametrize("error,problem", [
         ({"code": "rate_limit_exceeded", "message": "Too many requests"}, "rate_limited"),
@@ -421,3 +452,10 @@ def test_grok_module_never_imports_without_the_provider(settings):
     from kapso_voice_agent.bridge import ElevenAgentBridge, agent_bridge
     assert agent_bridge(settings) is ElevenAgentBridge
     assert agent_bridge(replace(settings, voice_provider="grok")) is grok_bridge.GrokAgentBridge
+
+
+def test_allowed_hosts_with_a_port_are_refused_because_they_never_match():
+    with pytest.raises(ConfigError, match="without ports"):
+        load_settings(environ={"ALLOWED_HOSTS": "voice.example.test,127.0.0.1:8080"})
+    assert load_settings(environ={"ALLOWED_HOSTS": "voice.example.test,127.0.0.1,[::1]"}).allowed_hosts == (
+        "voice.example.test", "127.0.0.1", "[::1]")

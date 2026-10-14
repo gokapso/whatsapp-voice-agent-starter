@@ -25,7 +25,8 @@ export default defineRailway(() => {
       // Railway mounts volumes as root. The image starts as root only to give DATA_DIR to its
       // unprivileged user, then drops root before the server starts (docker-entrypoint.sh).
       RAILWAY_RUN_UID: "0",
-      ALLOWED_HOSTS: "${{RAILWAY_PUBLIC_DOMAIN}}",
+      // Without ports. healthcheck.railway.app is the host Railway's deploy health check uses.
+      ALLOWED_HOSTS: "${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1",
       VOICE_PROVIDER: preserve(),
       XAI_API_KEY: preserve(),
       ELEVENLABS_API_KEY: preserve(),

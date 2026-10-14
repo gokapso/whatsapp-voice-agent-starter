@@ -10,7 +10,9 @@ https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech
 
 - Wait for `conversation.created`, send `session.update`, wait for `session.updated`.
 - Play the greeting with a non-interruptible `force_message`, so the AI (and recording)
-  disclosure plays in full and is not left to the model.
+  disclosure plays in full and is not left to the model. It is sent only once the call's media
+  is connected (the transport drops audio before that), and barge-in is ignored while it is
+  still being generated or played.
 - Caller audio goes out as `input_audio_buffer.append` (16 kHz PCM16, 100 ms chunks); the
   server's VAD decides turns. Agent audio arrives as `response.output_audio.delta`.
 - `input_audio_buffer.speech_started` while the agent is talking is a barge-in: the server
@@ -18,7 +20,8 @@ https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech
 - `response.function_call_arguments.done` runs the same tools as ElevenLabs, through the same
   ToolRunner (caller identity, strict confirmation, idempotent per call_id). Each result goes
   back as `function_call_output`; after the response ends, one `response.create` continues.
-- `end_call` is a local function: the call ends once the goodbye response has finished.
+- `end_call` is a local function: the call ends once the goodbye response has finished and its
+  audio has had time to play.
 """
 
 import asyncio
@@ -38,6 +41,8 @@ from .tools import TOOLS, ToolRunner, provider_tool_definitions
 XAI_REALTIME = "wss://api.x.ai/v1/realtime"
 SESSION_READY_SECONDS = 10
 BYTES_PER_SECOND = SAMPLE_RATE * 2
+PLAYBACK_MARGIN_SECONDS = 0.3
+MAX_GOODBYE_WAIT_SECONDS = 20
 # Errors xAI reports for harmless races (cancelling a finished response, truncating twice).
 BENIGN_ERRORS = ("response_cancel_not_active", "conversation_already_has_active_response")
 BENIGN_MESSAGES = ("no active response", "already has an active response", "truncat")
@@ -110,10 +115,11 @@ def error_code(message):
 
 
 class GrokAgentBridge(FrameProcessor):
-    def __init__(self, context, store, caller, log, ref, url_factory=grok_endpoint, capture=None, clock=time.monotonic):
+    def __init__(self, context, store, caller, log, ref, url_factory=grok_endpoint, capture=None, clock=time.monotonic,
+                 sleep=asyncio.sleep):
         super().__init__()
         self.context, self.store, self.log, self.ref = context, store, log, ref
-        self.capture, self.clock = capture, clock
+        self.capture, self.clock, self.sleep = capture, clock, sleep
         self.tools = ToolRunner(store, caller)
         self.url_factory = url_factory
         self.websocket = None
@@ -125,11 +131,12 @@ class GrokAgentBridge(FrameProcessor):
         self.ready = asyncio.Event()
         self.responding = set()          # response ids still producing audio
         self.dropped = set()             # responses the caller talked over
-        self.greeting_response = None
+        self.media_connected = False     # set by the session when WebRTC connects
+        self.greeting_pending = False    # provider ready, waiting for media
         self.greeting_sent = False
-        self.greeting_started = None
-        self.greeting_bytes = 0
-        self.protect_until = 0.0         # the disclosure greeting plays in full
+        self.greeting_response = None
+        self.greeting_until = 0.0        # local playback end of the disclosure greeting
+        self.playback_until = 0.0        # local playback end of everything queued so far
         self.tool_outputs_pending = False
         self.ending = False
         self.agent_text = {}
@@ -188,13 +195,8 @@ class GrokAgentBridge(FrameProcessor):
             self.ready.set()
             self.log.add("agent_session_ready", self.ref)
             self.log.provider_ok()
-            opening = self.context["dynamic_variables"]["opening_message"]
-            self.greeting_sent = True
-            await self.send({"type": "conversation.item.create", "item": {
-                "type": "force_message", "role": "assistant", "interruptible": False,
-                "content": [{"type": "output_text", "text": opening}]}})
-            if self.capture:
-                self.capture.add_turn("agent", opening)
+            self.greeting_pending = True
+            await self.greet()
         elif kind == "response.created":
             response_id = str((message.get("response") or {}).get("id") or "")
             self.responding.add(response_id)
@@ -207,20 +209,19 @@ class GrokAgentBridge(FrameProcessor):
             audio = base64.b64decode(message["delta"], validate=True)
             if len(audio) % 2:
                 raise ValueError("Invalid PCM audio")
+            self.playback_until = max(self.playback_until, self.clock()) + len(audio) / BYTES_PER_SECOND
             if response_id == self.greeting_response:
-                now = self.clock()
-                self.greeting_started = self.greeting_started or now
-                self.greeting_bytes += len(audio)
-                self.protect_until = self.greeting_started + self.greeting_bytes / BYTES_PER_SECOND + 0.3
+                self.greeting_until = self.playback_until
             self.audio_out += 1
             if self.audio_out == 1:
                 self.log.add("first_audio_out", self.ref)
             await self.push_frame(OutputAudioRawFrame(audio, SAMPLE_RATE, 1))
         elif kind == "input_audio_buffer.speech_started":
-            if self.clock() < self.protect_until:
-                return  # the disclosure greeting is still playing to the caller
+            if self.greeting_protected():
+                return  # the disclosure greeting is still being generated or played to the caller
             if self.audio_out:
                 self.dropped.update(self.responding)
+                self.playback_until = self.clock()
                 self.log.add("agent_interrupted", self.ref)
                 await self.broadcast_interruption()
         elif kind == "response.function_call_arguments.done":
@@ -243,6 +244,29 @@ class GrokAgentBridge(FrameProcessor):
                 # Before the session is configured nothing usable can follow; auth and rate limits never recover.
                 # Other errors leave the session connected with its previous settings (xAI docs).
                 raise GrokRefused(problem or "failed")
+
+    def greeting_protected(self):
+        if self.greeting_pending or (self.greeting_sent and (self.greeting_response is None
+                                                             or self.greeting_response in self.responding)):
+            return True
+        return self.clock() < self.greeting_until + PLAYBACK_MARGIN_SECONDS
+
+    async def media_ready(self):
+        """Called by the session when the WebRTC peer connects."""
+        self.media_connected = True
+        await self.greet()
+
+    async def greet(self):
+        if not (self.greeting_pending and self.media_connected and self.websocket):
+            return
+        self.greeting_pending = False
+        self.greeting_sent = True
+        opening = self.context["dynamic_variables"]["opening_message"]
+        await self.send({"type": "conversation.item.create", "item": {
+            "type": "force_message", "role": "assistant", "interruptible": False,
+            "content": [{"type": "output_text", "text": opening}]}})
+        if self.capture:
+            self.capture.add_turn("agent", opening)
 
     async def run_tool(self, message):
         name, call_id = str(message.get("name") or ""), str(message.get("call_id") or "")[:128]
@@ -271,7 +295,11 @@ class GrokAgentBridge(FrameProcessor):
         if self.capture and response_id in self.agent_text:
             self.capture.add_turn("agent", self.agent_text.pop(response_id))
         if self.ending:
-            # The goodbye was generated; closing ends the receive loop, which drains the audio.
+            # The goodbye is generated but may still be queued for the caller: wait for it to play,
+            # then close, which ends the receive loop and the call.
+            remaining = self.playback_until - self.clock()
+            if remaining > 0:
+                await self.sleep(min(remaining + PLAYBACK_MARGIN_SECONDS, MAX_GOODBYE_WAIT_SECONDS))
             await self.websocket.close()
             return
         if self.tool_outputs_pending:

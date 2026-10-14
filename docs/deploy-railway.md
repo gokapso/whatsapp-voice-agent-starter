@@ -52,7 +52,10 @@ railway up --detach                            # deploys with the variables and 
 
 `voice-agent railway variables` also sets `RAILWAY_RUN_UID=0`, which Railway needs so the image can
 take ownership of the root-owned volume (the entrypoint drops root before the server starts), and
-`ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}}`.
+`ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1`: Railway's deploy health
+check uses the host `healthcheck.railway.app`
+([docs](https://docs.railway.com/reference/healthchecks)), and the image's own health check uses
+`127.0.0.1`.
 
 Check it:
 

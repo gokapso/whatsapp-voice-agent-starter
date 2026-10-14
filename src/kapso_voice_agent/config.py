@@ -181,6 +181,11 @@ def load_settings(environ=None, env_file=None):
         allowed_hosts=tuple(h.strip() for h in get("ALLOWED_HOSTS").split(",") if h.strip()),
         dev_agent_ws_url=dev_url,
     )
+    with_port = [h for h in settings.allowed_hosts if not h.startswith("[") and ":" in h]
+    if with_port:
+        # The Host check compares names only (Starlette drops the port), so "host:8080" never matches.
+        raise ConfigError("ALLOWED_HOSTS takes host names without ports, e.g. voice.example.com,127.0.0.1 (got "
+                          + ", ".join(with_port) + ")")
     if settings.meta_graph_version[:1] != "v" or not settings.meta_graph_version[1:].replace(".", "").isdigit():
         raise ConfigError("META_GRAPH_VERSION must look like v24.0")
     if settings.phone_number_id and not settings.phone_number_id.isdigit():

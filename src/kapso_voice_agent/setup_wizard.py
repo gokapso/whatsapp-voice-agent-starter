@@ -246,7 +246,8 @@ def server_variables(path, target):
     notes = []
     if target == "railway":
         # Railway mounts volumes as root; the entrypoint hands DATA_DIR to the app user and drops root.
-        lines += ["RAILWAY_RUN_UID=0", "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}}"]
+        # Host names without ports: Railway's deploy health check and the image's own health check.
+        lines += ["RAILWAY_RUN_UID=0", "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1"]
         if values.get("TURN_PROVIDER") != "cloudflare" and values.get("ICE_SERVERS_JSON", "[]") in ("", "[]"):
             notes.append("No TURN relay is set: browser and WhatsApp audio will not connect on Railway.")
     if values.get("CALENDAR") == "local":

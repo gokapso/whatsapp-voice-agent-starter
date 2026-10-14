@@ -91,7 +91,7 @@ def test_export_for_railway_adds_host_settings_and_leaves_out_local_only_ones(tm
     lines = export_env(path, "railway", show=True, out=lambda *parts, **_: printed.append(" ".join(parts)))
     keys = [line.split("=", 1)[0] for line in lines]
     assert "XAI_API_KEY" in keys and "OPERATOR_TOKEN" in keys and "RAILWAY_RUN_UID" in keys
-    assert "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}}" in lines
+    assert "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1" in lines
     assert "DEV_AGENT_WS_URL" not in keys and "DATA_DIR" not in keys
     notes = "\n".join(printed)
     assert "No TURN relay" in notes and "CALENDAR=local" in notes

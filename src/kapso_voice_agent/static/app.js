@@ -6,6 +6,7 @@ const STORAGE = 'consoleAccessKey';
 const clock = new Intl.DateTimeFormat(undefined, {hour: 'numeric', minute: '2-digit'});
 let key = sessionStorage.getItem(STORAGE) || '';
 let peer, microphone, browserRef, outboundRef, allowedRecipient, state, poller, timer, callStartedAt;
+let attempt = 0;  // bumped by sign-out, so a call that is still starting knows to hang itself up
 
 class Unauthorized extends Error {}
 
@@ -89,7 +90,15 @@ $('#sign-in-form').onsubmit = event => {
 };
 
 async function signOut(message = '') {
+  attempt += 1;
   if (browserRef || peer) { await hangUp(); }
+  if (outboundRef) {
+    // Signing out ends the console's WhatsApp call too; its controls disappear with the key.
+    await api(`/calls/${encodeURIComponent(outboundRef)}/hangup`, {}).catch(() => {});
+    outboundRef = undefined;
+    $('#outbound-stop').disabled = true;
+    $('#outbound-status').textContent = '';
+  }
   forgetKey();
   showSignedIn(false);
   showKeyError(message);
@@ -283,6 +292,7 @@ function microphoneMessage(error) {
 }
 
 $('#start').onclick = async () => {
+  const started = attempt, startKey = key;
   $('#start').disabled = true;
   $('#call-status').textContent = 'Asking for microphone access…';
   try {
@@ -318,10 +328,16 @@ $('#start').onclick = async () => {
       };
     });
     const answer = await api('/browser-call', {sdp: peer.localDescription.sdp});
+    if (attempt !== started) {
+      // Signed out while the call was starting: end the server side with the key it started with.
+      await api(`/calls/${encodeURIComponent(answer.ref)}/hangup`, {}, startKey).catch(() => {});
+      return;
+    }
     browserRef = answer.ref;
     await peer.setRemoteDescription({type: answer.type, sdp: answer.sdp});
     $('#stop').disabled = false;
   } catch (error) {
+    if (attempt !== started) { return; }  // sign-out already released the call
     release();
     browserRef = undefined;
     $('#start').disabled = false;
@@ -356,11 +372,16 @@ $('#permission').onclick = async () => {
 
 $('#dial').onclick = async () => {
   if (allowedRecipient !== $('#recipient').value) { return; }
+  const started = attempt, startKey = key;
   $('#dial').disabled = true;
   allowedRecipient = undefined;
   $('#outbound-status').textContent = 'Requesting the call…';
   try {
     const result = await api('/outbound/call', {recipient: $('#recipient').value});
+    if (attempt !== started) {
+      if (result.state === 'ringing') { await api(`/calls/${encodeURIComponent(result.ref)}/hangup`, {}, startKey).catch(() => {}); }
+      return;
+    }
     outboundRef = result.state === 'ringing' ? result.ref : undefined;
     $('#outbound-stop').disabled = !outboundRef;
     $('#outbound-status').textContent = outboundRef ? 'Ringing. Answer on the phone.' : 'The call ended.';

@@ -276,6 +276,8 @@ class AgentSession:
         @self.transport.event_handler("on_client_connected")
         async def connected(transport, client):
             log.add("rtc_connected", ref, media=media_path(connection))
+            if hasattr(self.bridge, "media_ready"):
+                await self.bridge.media_ready()  # Grok: the greeting waits for connected media
 
         @self.transport.event_handler("on_client_disconnected")
         async def disconnected(transport, client):
