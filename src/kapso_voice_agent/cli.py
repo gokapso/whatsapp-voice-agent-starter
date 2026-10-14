@@ -3,7 +3,7 @@
 Start here: `voice-agent init` writes a private .env with fresh local secrets, and
 `voice-agent console-key` copies the key that opens the operator console.
 
-Offline commands (no network, no credentials): init, console-key, check, agent plan, tools schema,
+Offline commands (no network, no credentials): setup, init, console-key, export-env, check, agent plan, tools schema,
 tools call (with CALENDAR=local), kapso webhook (without --yes), artifacts prune, dev fake-agent,
 dev init-env, secrets.
 Network commands (operator only): serve, agent apply --yes, agent verify, kapso webhook --yes,
@@ -18,8 +18,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shutil
-import subprocess
 import sys
 
 from dotenv.parser import parse_stream
@@ -460,7 +458,25 @@ def cmd_init(args):
           "`uv run voice-agent agent apply --yes --save-agent-id`.")
 
 
-CLIPBOARDS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["clip.exe"])
+def cmd_setup(args):
+    from .setup_wizard import SetupError, default_path, run
+    path = default_path(args.env_file)
+    command = "uv run voice-agent" + (f" --env-file {shown_path(path)}" if args.env_file else "")
+    try:
+        run(path, command, provider=args.provider, calendar=args.calendar, host=args.host,
+            whatsapp=args.whatsapp or None, interactive=not args.no_input)
+    except SetupError as error:
+        fail(str(error))
+    except (EOFError, KeyboardInterrupt):
+        fail("Setup stopped; nothing more was written")
+
+
+def cmd_export_env(args):
+    from .setup_wizard import SetupError, default_path, export_env
+    try:
+        export_env(default_path(args.env_file), args.target, show=args.show)
+    except SetupError as error:
+        fail(str(error))
 
 
 def cmd_console_key(args):
@@ -477,16 +493,11 @@ def cmd_console_key(args):
     if args.show:
         print(settings.operator_token)
         return
-    for command in CLIPBOARDS:
-        if shutil.which(command[0]):
-            try:
-                subprocess.run(command, input=settings.operator_token.encode(), check=True, timeout=5,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except (OSError, subprocess.SubprocessError):
-                continue
-            print(f"Copied the console access key (OPERATOR_TOKEN in {source}) to the clipboard. "
-                  "Paste it into the console's sign-in field.")
-            return
+    from .setup_wizard import copy_to_clipboard
+    if copy_to_clipboard(settings.operator_token):
+        print(f"Copied the console access key (OPERATOR_TOKEN in {source}) to the clipboard. "
+              "Paste it into the console's sign-in field.")
+        return
     fail("No clipboard tool found (pbcopy, wl-copy, xclip). In a private terminal, run "
          "`voice-agent console-key --show` to print it")
 
@@ -506,6 +517,17 @@ def parser():
     commands.add_parser("init", help="Write a private .env (or --env-file) with fresh local secrets; never overwrites").set_defaults(
         func=cmd_init)
     commands.add_parser("check", help="Validate config, prompt, greetings and tool behavior offline").set_defaults(func=cmd_check)
+    setup = commands.add_parser("setup", help="Guided setup: voice provider, calendar and host; writes the env file")
+    setup.add_argument("--provider", choices=("elevenlabs", "grok"))
+    setup.add_argument("--calendar", choices=("calcom", "local"))
+    setup.add_argument("--host", choices=("local", "vps", "railway"))
+    setup.add_argument("--whatsapp", action="store_true", help="Also ask for the Kapso and WhatsApp settings")
+    setup.add_argument("--no-input", action="store_true", help="Do not ask anything; use the flags and existing values")
+    setup.set_defaults(func=cmd_setup)
+    export = commands.add_parser("export-env", help="Copy the server's variables for a host's bulk variable editor")
+    export.add_argument("--for", dest="target", choices=("railway", "vps"), required=True)
+    export.add_argument("--show", action="store_true", help="Print them instead of copying (they contain secrets)")
+    export.set_defaults(func=cmd_export_env)
     key = commands.add_parser("console-key", help="Copy the operator console access key (OPERATOR_TOKEN) to the clipboard")
     key.add_argument("--show", action="store_true", help="Print it instead (it stays in your terminal history)")
     key.set_defaults(func=cmd_console_key)
