@@ -3,6 +3,8 @@
 Public (expose through your HTTPS ingress):
   GET  /healthz              -> {"ok": true}; no configuration details
   POST /webhooks/whatsapp    -> Kapso-signed Meta Calling webhook (raw-body HMAC, 1 MB cap)
+  POST /webhooks/xai-sip     -> xAI Direct SIP incoming call (Standard Webhooks signature); 404 unless
+                                XAI_SIP_WEBHOOK_SECRET is set (xai_sip.py)
 
 Operator (bearer OPERATOR_TOKEN; returns 404 when the token is unset):
   GET  /operator/                         console page (contains no secrets)
@@ -35,6 +37,7 @@ from .outbound import OutboundError
 from .private import private_dir, prune_local_artifacts
 from .recording import RecordingUnknown
 from .turn import TurnUnavailable
+from .xai_sip import SipCalls, incoming_call, verify_standard_webhook
 
 STATIC = Path(__file__).parent / "static"
 MAX_WEBHOOK_BYTES = 1_000_000
@@ -64,6 +67,19 @@ def verify_signature(secret, raw, header):
         return False
     expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, header.lower())
+
+
+async def read_capped(request):
+    """The raw request body, refused above MAX_WEBHOOK_BYTES before it is all read."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(413, "Webhook too large")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > MAX_WEBHOOK_BYTES:
+            raise HTTPException(413, "Webhook too large")
+    return bytes(raw)
 
 
 def prune_once(settings, log):
@@ -106,6 +122,7 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     manager = CallManager(settings, spec, store, log, session_factory=session_factory,
                           connection_factory=connection_factory, kapso_factory=kapso_factory,
                           recording_reader=recording_reader)
+    sip_calls = SipCalls(settings, spec, store, log)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -118,9 +135,11 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             pruner.cancel()
             await asyncio.gather(pruner, return_exceptions=True)
             await manager.shutdown()
+            await sip_calls.shutdown()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager, app.state.log, app.state.settings = manager, log, settings
+    app.state.sip_calls = sip_calls
     if settings.allowed_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
@@ -132,16 +151,9 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     async def webhook(request: Request):
         if not settings.webhook_secret:
             raise HTTPException(503, "Webhook secret is not configured")
-        declared = request.headers.get("content-length", "")
-        if declared.isdigit() and int(declared) > MAX_WEBHOOK_BYTES:
-            raise HTTPException(413, "Webhook too large")
-        raw = bytearray()
-        async for chunk in request.stream():
-            raw.extend(chunk)
-            if len(raw) > MAX_WEBHOOK_BYTES:
-                raise HTTPException(413, "Webhook too large")
+        raw = await read_capped(request)
         # Verify the exact bytes before parsing anything.
-        if not verify_signature(settings.webhook_secret, bytes(raw), request.headers.get("x-webhook-signature")):
+        if not verify_signature(settings.webhook_secret, raw, request.headers.get("x-webhook-signature")):
             raise HTTPException(401, "Invalid signature")
         try:
             payload = json.loads(raw)
@@ -155,6 +167,23 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             # Kapso will retry; the call keeps ringing until then or until the caller gives up.
             raise HTTPException(503, "Server is not configured to answer calls") from None
         return counts
+
+    @app.post("/webhooks/xai-sip")
+    async def xai_sip_webhook(request: Request):
+        if not settings.xai_sip_webhook_secret:
+            raise HTTPException(404)
+        raw = await read_capped(request)
+        if not verify_standard_webhook(settings.xai_sip_webhook_secret, request.headers, raw):
+            raise HTTPException(401, "Invalid signature")
+        try:
+            call = incoming_call(json.loads(raw))
+        except ValueError:
+            raise HTTPException(400, "Body is not JSON") from None
+        if call is None:
+            return {"ignored": True}
+        if not settings.xai_sip_ready:
+            raise HTTPException(503, "Server is not configured to control xAI SIP calls")
+        return {"call": sip_calls.start(*call, manager.caller_key)}
 
     def operator(request: Request):
         if not settings.operator_enabled:

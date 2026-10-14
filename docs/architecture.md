@@ -23,7 +23,7 @@ WhatsApp caller ──(Meta WebRTC audio, UDP)───────────�
 - This bridge and call handling carried one real English outbound WhatsApp call to a handset
   (2026-10-07), with the earlier local booking tools; the Cal.com tools have not been on a real
   call yet. Inbound calls use the same bridge but were not part of that call. It does not use
-  Daily rooms or Pipecat Cloud.
+  Daily rooms. The same call code can also run in a Pipecat Cloud session (below).
 
 ## Inbound call sequence
 
@@ -33,8 +33,9 @@ WhatsApp caller ──(Meta WebRTC audio, UDP)───────────�
    return 200 right away. Over capacity: send `reject` instead.
 3. `answer()`: get the verified recording state (`recording.py`; unknown → `reject`), create the
    peer, apply the offer, make the answer SDP (sha-256 fingerprint only),
-   `pre_accept`, `accept` (20 s budget). Only then create the agent session, so the greeting
-   is not spoken into a call that is not connected yet.
+   `pre_accept`, `accept` (20 s budget). Only then create the agent session. The bridge opens the
+   provider conversation (ElevenLabs) or plays the greeting (Grok) once the call's media connects,
+   so the greeting is not spoken into a call whose audio is not flowing yet.
 4. The session sends `conversation_initiation_client_data` with per-call variables
    (`opening_message`, `recording_status`, `today`, `weekday`, `timezone`, `business_name`,
    `call_purpose`).
@@ -55,6 +56,22 @@ permission check → local SDP offer → `connect` → Meta's SDP answer (webhoo
 the HTTP response) → apply → `ACCEPTED` status → start agent → same endings as inbound. A connect
 whose outcome is unknown is reported, never retried.
 
+## Pipecat Cloud session (`cloud.py`, `examples/pipecat-cloud`)
+
+Kapso's dashboard Pipecat provider starts one Pipecat Cloud session per call, with the Meta
+webhook in the start body. `cloud.answer_launch` looks the call up through Kapso (exists on this
+number, user-initiated, claimed, not over), takes the caller identity from Kapso's saved call, and
+passes that one `connect` to a `CallManager`. From there the inbound sequence above applies. There
+is no webhook route, console or persistent `DATA_DIR`.
+
+## Provider SIP (`sip.py`, `xai_sip.py`)
+
+`voice-agent sip status` reads who answers the number's calls; `voice-agent sip plan` prints the
+SIP requests without sending them. Meta's SIP mode replaces the Calling API for that number.
+`xai_sip.py` is the control service for xAI Direct SIP: signed webhook in, one realtime session
+per `call_id` for instructions, greeting and tools, then hangup. xAI handles the audio. Both SIP
+paths are blocked for WhatsApp today (`docs/choose-where-calls-run.md`).
+
 ## Source map
 
 | File | Responsibility | Key tests |
@@ -64,6 +81,9 @@ whose outcome is unknown is reported, never retried.
 | `src/kapso_voice_agent/outbound.py` | Outbound call state machine | `test_outbound.py` |
 | `src/kapso_voice_agent/bridge.py` | Pipecat pipeline + ElevenLabs WebSocket protocol; picks the bridge for `VOICE_PROVIDER` | `test_call_flow.py` |
 | `src/kapso_voice_agent/grok_bridge.py` | xAI Grok Voice realtime protocol in the same pipeline slot | `test_grok_bridge.py` |
+| `src/kapso_voice_agent/cloud.py` | Pipecat Cloud entry: Kapso launch body, Kapso lookup, then `CallManager` | `test_cloud_launch.py` |
+| `src/kapso_voice_agent/sip.py` | `sip status` (read-only) and `sip plan` (dry run) for provider SIP | via `voice-agent sip plan` |
+| `src/kapso_voice_agent/xai_sip.py` | xAI Direct SIP: Standard Webhooks check, session control, tools, hangup | `test_xai_sip.py` |
 | `src/kapso_voice_agent/turn.py` | Per-call ICE servers; Cloudflare TURN credentials | `test_turn.py` |
 | `src/kapso_voice_agent/setup_wizard.py` | `voice-agent setup`, `export-env`, `railway variables` | `test_setup_wizard.py` |
 | `src/kapso_voice_agent/kapso.py` | Kapso call-action client | via flow tests |
@@ -85,6 +105,8 @@ whose outcome is unknown is reported, never retried.
 | `agent/provider-tests/` | Opt-in ElevenLabs agent tests (LLM-judged, run by the operator) | `test_agent_config.py` (shape only) |
 | `scripts/smoke_setup.py`, `smoke_local.py` | Development smoke checks with real processes, offline | run by hand |
 | `scripts/smoke_turn_relay.py` | Docker: image as Railway runs it, audio only through a coturn relay | run by hand |
+| `examples/pipecat-cloud/` | `bot.py`, Dockerfile on Pipecat's base image, `pcc-deploy.toml` | `test_cloud_launch.py`; container check in its README |
+| `examples/elevenlabs-sip/`, `examples/xai-sip/` | SIP setup guides; minimal no-tools ElevenLabs prompt | — |
 | `.railway/railway.ts`, `docker-entrypoint.sh`, `examples/vps/` | Railway project, root hand-off for volumes, VPS Compose + Caddy | `docs/deploy-railway.md` |
 
 ## Contracts

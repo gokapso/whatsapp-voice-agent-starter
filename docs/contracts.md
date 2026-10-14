@@ -8,6 +8,7 @@ Small, stable interfaces. Change them only together with their tests.
 | --- | --- | --- | --- |
 | `GET /healthz` | none | — | `{"ok": true}` |
 | `POST /webhooks/whatsapp` | `X-Webhook-Signature` = hex HMAC-SHA256(raw body, `WHATSAPP_WEBHOOK_SECRET`) | Meta webhook JSON, ≤ 1 MB | `{"calls": n, "statuses": n, "ignored": n}`; 401 bad signature; 400 not JSON; 413 too large; 503 secret unset, or an inbound connect while the agent is not configured |
+| `POST /webhooks/xai-sip` | Standard Webhooks v1: `webhook-id`, `webhook-timestamp` (±300 s), `webhook-signature` (`v1,<base64 HMAC-SHA256>` list) with `XAI_SIP_WEBHOOK_SECRET` (`whsec_...`) | xAI `realtime.call.incoming` JSON, ≤ 1 MB | `{"call": "started"\|"duplicate"\|"busy"}` or `{"ignored": true}`; 404 secret unset; 401 bad signature; 400 not JSON; 503 not configured |
 | `GET /operator/`, `/operator/app.js`, `/operator/console.css` | none (page has no secrets); 404 if `OPERATOR_TOKEN` unset | — | console and assets |
 | `GET /operator/api/state` | `Authorization: Bearer <OPERATOR_TOKEN>` (the console access key) | — | readiness flags, `agent_missing` (setting names), `voice` `{provider: elevenlabs\|grok, label, model, voice, offline_fake_agent, problem: null\|{problem: auth\|rate_limited\|not_found\|unreachable\|failed, at}}`, `calendar` (`calcom`\|`local`\|null), `recording` `{provider_recording: on\|off\|unknown\|not_checked\|off (offline fake agent), local_capture, agent_toml_record_audio, next_greeting_says_recorded: true\|false\|null, last_check_error}`, active calls `{ref, direction, state}`, events, native artifact notices |
 | `POST /operator/api/browser-call` | bearer | `{"sdp": "<offer>"}` | `{"ref", "type": "answer", "sdp"}`; 409 at capacity; 503 agent not ready (lists what is missing) or recording setting unknown |
@@ -35,6 +36,25 @@ elsewhere first.
 
 Deduplication is by Meta call ID (512 most recent kept in memory). `X-Idempotency-Key` is not
 used; per-call guards make repeated deliveries harmless in one process.
+
+## Pipecat Cloud launch body
+
+`cloud.answer_launch` takes the body that Kapso's dashboard Pipecat provider sends to
+`/v1/public/{agent}/start`: `{"kind": "whatsapp_connect", "webhook": <Meta calls webhook>,
+"whatsapp_token", "phone_number_id", "context"}`. It needs exactly one `USER_INITIATED` `connect`
+for `WHATSAPP_PHONE_NUMBER_ID`, and Kapso's saved call (`GET .../calls?call_id=...&limit=1`) with
+`session_started_at` set and no `ended_at`. The caller identity is Kapso's
+`business_scoped_user_id`, else `user_wa_id`; a body that disagrees is refused. Outcomes:
+`finished`, `unverified`, `not_started`, `no_inbound_connect`, `not_configured`,
+`ignored_other_phone_number`, `ignored_kind`. `whatsapp_token` and `context` are not used.
+
+## xAI SIP session
+
+After a verified `realtime.call.incoming`, `xai_sip.SipCall` opens
+`wss://api.x.ai/v1/realtime?call_id=...` and sends `session.update` (`instructions`, `voice`,
+`turn_detection: server_vad`, `tools`; no audio format). After `session.updated` it sends the
+greeting as a non-interruptible `force_message`. Tool calls and `end_call` work as in the Grok
+bridge. The call ends with `POST https://api.x.ai/v1/realtime/calls/{call_id}/hangup`.
 
 ## Tool results
 

@@ -1,8 +1,12 @@
 # Voice providers and hosting
 
-Two choices decide how you run this starter: **who runs the conversation** (the voice provider)
+Two choices decide how you run this server: **who runs the conversation** (the voice provider)
 and **where this server runs** (the host). `uv run voice-agent setup` asks both and writes the
 env file. This page explains the options and what each one was tested with.
+
+The provider does not replace this server. With ElevenLabs or Grok, this server still answers the
+WhatsApp call, carries its audio and runs the tools. For options without a server of yours
+(Pipecat Cloud, provider SIP), see [`choose-where-calls-run.md`](choose-where-calls-run.md).
 
 ## Voice providers
 
@@ -47,16 +51,9 @@ What each host needs, whichever you pick:
 - **A long-lived process**: a call keeps one WebSocket to the voice provider for its whole length.
 - **Secrets in the host's secret store**, not in the image or the repository.
 
-## Hosted platforms that answer WhatsApp calls themselves
+## Other places a call can run
 
-These run the whole call on the provider's side. They are different topologies, not deployment
-targets for this server, and this repository does not implement them.
-
-| Platform | How a WhatsApp call reaches it | What changes compared to this starter |
-| --- | --- | --- |
-| [ElevenLabs Agents WhatsApp](https://elevenlabs.io/docs/eleven-agents/whatsapp) | You connect your WhatsApp Business account to ElevenLabs | No server here for calls; the tools must become ElevenLabs server tools (webhooks) instead of client tools; the number's calls go to ElevenLabs, not Kapso |
-| [Pipecat Cloud WhatsApp](https://docs.pipecat.ai/deployment/pipecat-cloud/guides/whatsapp) | Meta's webhook points at your Pipecat Cloud agent | Pipecat Cloud hosts a Pipecat bot with SmallWebRTC and handles media; it takes Meta's webhook and token directly, so this starter's Kapso call handling would need porting |
-| [xAI SIP](https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech/sip) | A SIP trunk sends calls to `sip.voice.x.ai`; xAI sends a signed webhook and you control the session over WebSocket | Phone (PSTN) calls through a SIP provider; xAI's SIP page does not mention WhatsApp |
-
-Choose this starter when you want the calls to arrive through Kapso, your tools and calendar to run
-on your own server, and the option to switch voice providers.
+[`choose-where-calls-run.md`](choose-where-calls-run.md) compares this server with Pipecat Cloud
+(this starter's code, one session per call) and with ElevenLabs or xAI over SIP (blocked for
+WhatsApp today). ElevenLabs' native WhatsApp integration needs the number imported into ElevenLabs,
+so the number leaves Kapso. This starter does not use it.

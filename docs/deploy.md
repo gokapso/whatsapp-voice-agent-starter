@@ -59,8 +59,8 @@ Options for media:
    aiortc uses only the **first** STUN URL and the **first** TURN URL it can use, so list the one
    you want first. A STUN entry only helps when the NAT is friendly. See
    [`deploy-railway.md`](deploy-railway.md).
-3. Hosted platforms that answer WhatsApp calls themselves (ElevenLabs Agents WhatsApp, Pipecat
-   Cloud) are different integrations; see [`providers-and-hosting.md`](providers-and-hosting.md).
+3. No server of yours: run each call in Pipecat Cloud ([`examples/pipecat-cloud`](../examples/pipecat-cloud)).
+   Provider SIP is blocked for WhatsApp today. See [`choose-where-calls-run.md`](choose-where-calls-run.md).
 
 The event `rtc_connected` in the console's event log shows `media=direct` or `media=relay`, so
 you can see which path a call used.
@@ -138,7 +138,8 @@ media, not a proof.
 1. Enable Calling on the number in the Kapso dashboard (**Phone numbers → Enable calls**) and
    confirm Meta reports it enabled. This starter does not automate that step.
 2. In the dashboard, check whether a voice agent is already assigned to the number. Decide which
-   one answers: the dashboard agent or this server. Not both.
+   one answers: the dashboard agent, the Inbox or this server. Run `voice-agent sip status`: if it
+   shows SIP, Meta sends the calls to that SIP server and this server receives none.
 3. Register this server as the number's Meta webhook:
 
 ```sh
@@ -157,8 +158,8 @@ the number also receives messages, route those elsewhere first.
    posts it to `/webhooks/whatsapp`. Unsigned or wrongly signed requests get 401.
 2. The server reads the agent's recording setting (it sends `reject` if it cannot), builds the WebRTC
    answer, and sends `pre_accept`, then `accept`, through Kapso's call API.
-3. Only after `accept` does the Riley session start, so the greeting is never spoken into a call
-   that is not connected.
+3. Only after `accept` does the Riley session start, and the greeting waits until the call's audio
+   is connected.
 4. The call ends when Riley uses `end_call` (the server sends `terminate`), when the caller hangs
    up (Meta's `terminate` webhook), or at `MAX_SESSION_SECONDS`.
 

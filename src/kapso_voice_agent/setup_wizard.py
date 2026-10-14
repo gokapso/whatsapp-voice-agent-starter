@@ -19,9 +19,10 @@ from .config import ConfigError, load_settings
 
 PROVIDERS = {
     "elevenlabs": ("ElevenLabs Agents", "ElevenLabs runs speech, the LLM and the voice from an agent you create "
-                                        "with `voice-agent agent apply`. Needs ELEVENLABS_API_KEY."),
-    "grok": ("Grok Voice", "xAI grok-voice-3.0 speech to speech, configured per call from this repository. "
-                           "Needs XAI_API_KEY only."),
+                                        "with `voice-agent agent apply`. This server still carries the call audio "
+                                        "and runs the tools. Needs ELEVENLABS_API_KEY."),
+    "grok": ("Grok Voice", "xAI grok-voice-3.0 speech to speech, configured per call from this repository. This "
+                           "server still carries the call audio and runs the tools. Needs XAI_API_KEY only."),
 }
 CALENDARS = {
     "calcom": ("Cal.com", "Real availability and bookings. Needs CAL_API_KEY and agent/business.json."),
@@ -45,7 +46,7 @@ PLAIN = {"WHATSAPP_PHONE_NUMBER_ID": "Meta phone number ID (numeric, not the dis
 VALUE = re.compile(r"^[A-Za-z0-9._~+/=:@-]{1,512}$")
 CLIPBOARDS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["clip.exe"])
 # What a hosted server reads. DATA_DIR comes from the image; DEV_AGENT_WS_URL is loopback-only.
-SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
+SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "XAI_SIP_WEBHOOK_SECRET", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
                "OPERATOR_TOKEN", "CALLER_KEY_SECRET", "KAPSO_API_KEY", "WHATSAPP_PHONE_NUMBER_ID",
                "WHATSAPP_WEBHOOK_SECRET", "META_GRAPH_VERSION", "ICE_SERVERS_JSON", "TURN_PROVIDER",
                "CLOUDFLARE_TURN_KEY_ID", "CLOUDFLARE_TURN_API_TOKEN", "TURN_TRANSPORT", "ENABLE_OUTBOUND",
@@ -242,8 +243,23 @@ def server_variables(path, target):
         load_settings(environ=dict(values))
     except ConfigError as error:
         raise SetupError(f"{path} is not valid: {error}") from None
-    lines = [f"{key}={values[key]}" for key in SERVER_KEYS if values.get(key)]
+    keys = SERVER_KEYS
     notes = []
+    if target == "pipecat-cloud":
+        # No webhook and no console in a Cloud session; Kapso's API vouches for each call (cloud.py).
+        keys = tuple(k for k in SERVER_KEYS if k not in ("OPERATOR_TOKEN", "WHATSAPP_WEBHOOK_SECRET", "ENABLE_OUTBOUND",
+                                                         "XAI_SIP_WEBHOOK_SECRET"))
+        if not values.get("CALLER_KEY_SECRET"):
+            raise SetupError("Set CALLER_KEY_SECRET in the env file first. Use the same value everywhere this number's "
+                             "calls are answered, or callers lose their bookings")
+        missing = [k for k in ("KAPSO_API_KEY", "WHATSAPP_PHONE_NUMBER_ID") if not values.get(k)]
+        if missing:
+            raise SetupError("Pipecat Cloud answers calls through Kapso: set " + " and ".join(missing) + " first")
+        if values.get("CALENDAR") == "local":
+            raise SetupError("CALENDAR=local is for development; a Cloud session loses it after each call. Use Cal.com")
+        notes.append("Each Cloud session starts with an empty DATA_DIR: callers can change a booking only in the "
+                     "call that made it (examples/pipecat-cloud/README.md).")
+    lines = [f"{key}={values[key]}" for key in keys if values.get(key)]
     if target == "railway":
         # Railway mounts volumes as root; the entrypoint hands DATA_DIR to the app user and drops root.
         # Host names without ports: Railway's deploy health check and the image's own health check.
@@ -257,11 +273,21 @@ def server_variables(path, target):
     return lines, notes
 
 
-def export_env(path, target, show=False, out=print):
-    """Copy (or with show, print) the server's variables for the host's bulk variable editor."""
+def export_env(path, target, show=False, out=print, file=None):
+    """Copy (or with show, print; or with file, write to a new 0600 file) the server's variables
+    for the host's bulk variable editor or secret store."""
+    from .cli import write_new_private_file
     lines, notes = server_variables(path, target)
     text = "\n".join(lines) + "\n"
-    if show:
+    if file:
+        Path(file).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            write_new_private_file(file, text)
+        except FileExistsError:
+            raise SetupError(f"{file} already exists; choose a new file name") from None
+        out(f"Wrote {len(lines)} variables for {target} to {file} (0600): " + ", ".join(line.split("=", 1)[0] for line in lines))
+        out("It holds secrets. Delete it after you upload it.")
+    elif show:
         out(text, end="")
     elif copy_to_clipboard(text):
         out(f"Copied {len(lines)} variables for {target} to the clipboard: " + ", ".join(line.split("=", 1)[0] for line in lines))

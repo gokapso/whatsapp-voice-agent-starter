@@ -97,6 +97,22 @@ def test_export_for_railway_adds_host_settings_and_leaves_out_local_only_ones(tm
     assert "No TURN relay" in notes and "CALENDAR=local" in notes
 
 
+def test_export_for_pipecat_cloud_writes_a_private_file_without_console_or_webhook_secrets(tmp_path):
+    path = tmp_path / ".env"
+    cli.main(["--env-file", str(path), "init"])
+    update_env(path, {"VOICE_PROVIDER": "grok", "XAI_API_KEY": XAI_KEY, "KAPSO_API_KEY": "test-kapso-key-not-real",
+                      "WHATSAPP_PHONE_NUMBER_ID": "100000000000001", "CAL_API_KEY": "test-cal-key-not-real"})
+    target, printed = tmp_path / "build" / "pipecat-cloud.env", []
+    export_env(path, "pipecat-cloud", out=lambda *parts, **_: printed.append(" ".join(parts)), file=target)
+    keys = [line.split("=", 1)[0] for line in target.read_text().splitlines()]
+    assert "KAPSO_API_KEY" in keys and "CALLER_KEY_SECRET" in keys
+    assert "OPERATOR_TOKEN" not in keys and "WHATSAPP_WEBHOOK_SECRET" not in keys
+    assert oct(target.stat().st_mode & 0o777) == "0o600" and XAI_KEY not in "\n".join(printed)
+    update_env(path, {"CALENDAR": "local"})
+    with pytest.raises(SetupError):
+        export_env(path, "pipecat-cloud", out=lambda *_a, **_k: None, file=tmp_path / "again.env")
+
+
 def test_export_copies_instead_of_printing_by_default(tmp_path, monkeypatch):
     path = tmp_path / ".env"
     cli.main(["--env-file", str(path), "init"])

@@ -4,10 +4,10 @@ Start here: `voice-agent init` writes a private .env with fresh local secrets, a
 `voice-agent console-key` copies the key that opens the operator console.
 
 Offline commands (no network, no credentials): setup, init, console-key, export-env, check, agent plan, tools schema,
-tools call (with CALENDAR=local), kapso webhook (without --yes), artifacts prune, dev fake-agent,
+tools call (with CALENDAR=local), kapso webhook (without --yes), sip plan, artifacts prune, dev fake-agent,
 dev init-env, secrets.
 Network commands (operator only): serve, agent apply --yes, agent verify, kapso webhook --yes, railway variables --yes,
-artifacts fetch, calendar check (read-only), tools call (with Cal.com; writes need --yes).
+artifacts fetch, calendar check (read-only), sip status (read-only), tools call (with Cal.com; writes need --yes).
 """
 
 import argparse
@@ -239,6 +239,40 @@ def cmd_kapso_webhook(args):
         with httpx.Client(timeout=20, follow_redirects=False) as client:
             print(dumps(apply_webhook(settings, args.url, client), settings))
     except SetupError as error:
+        fail(str(error))
+
+
+def cmd_sip_status(args):
+    """Read-only: who answers this number's calls (Calling API or SIP). Never reads the SIP password."""
+    import asyncio
+
+    from .kapso import KapsoClient, KapsoError
+    from .sip import status_lines
+    settings, _ = context(args)
+    if not (settings.kapso_api_key and settings.phone_number_id):
+        fail("Set KAPSO_API_KEY and WHATSAPP_PHONE_NUMBER_ID in the env file first")
+
+    async def read():
+        client = KapsoClient(settings.kapso_api_key, settings.phone_number_id, settings.meta_graph_version)
+        try:
+            return await client.calling_settings()
+        finally:
+            await client.close()
+    try:
+        calling = asyncio.run(read())
+    except KapsoError as error:
+        fail(f"Could not read the number's calling settings: {error}")
+    print(f"Phone number ID {settings.phone_number_id}:")
+    for line in status_lines(calling):
+        print("  " + line)
+
+
+def cmd_sip_plan(args):
+    from .sip import SipPlanError, plan
+    settings, _ = context(args)
+    try:
+        print(plan(args.provider, args.number, settings.phone_number_id, settings.meta_graph_version, args.control_url))
+    except SipPlanError as error:
         fail(str(error))
 
 
@@ -476,7 +510,7 @@ def cmd_setup(args):
 def cmd_export_env(args):
     from .setup_wizard import SetupError, default_path, export_env
     try:
-        export_env(default_path(args.env_file), args.target, show=args.show)
+        export_env(default_path(args.env_file), args.target, show=args.show, file=args.file)
     except SetupError as error:
         fail(str(error))
 
@@ -534,9 +568,10 @@ def parser():
     setup.add_argument("--whatsapp", action="store_true", help="Also ask for the Kapso and WhatsApp settings")
     setup.add_argument("--no-input", action="store_true", help="Do not ask anything; use the flags and existing values")
     setup.set_defaults(func=cmd_setup)
-    export = commands.add_parser("export-env", help="Copy the server's variables for a host's bulk variable editor")
-    export.add_argument("--for", dest="target", choices=("railway", "vps"), required=True)
+    export = commands.add_parser("export-env", help="Copy the server's variables for a host's variable editor or secret store")
+    export.add_argument("--for", dest="target", choices=("railway", "vps", "pipecat-cloud"), required=True)
     export.add_argument("--show", action="store_true", help="Print them instead of copying (they contain secrets)")
+    export.add_argument("--file", help="Write them to this new file (0600) instead, for `pipecat cloud secrets set --file`")
     export.set_defaults(func=cmd_export_env)
     railway = commands.add_parser("railway", help="Railway helpers").add_subparsers(dest="railway_command", required=True)
     push = railway.add_parser("variables", help="Set the server's variables on the linked Railway service (dry run unless --yes)")
@@ -570,6 +605,15 @@ def parser():
     webhook.add_argument("--yes", action="store_true", help="Really create it (refuses if one exists)")
     webhook.set_defaults(func=cmd_kapso_webhook)
 
+    sip = commands.add_parser("sip", help="Provider-hosted SIP for the number (read-only status, offline plan)").add_subparsers(
+        dest="sip_command", required=True)
+    sip.add_parser("status", help="Read who answers the number's calls: Calling API or SIP (read-only)").set_defaults(
+        func=cmd_sip_status)
+    sip_plan = sip.add_parser("plan", help="Print the SIP setup and undo requests for a provider (offline; applies nothing)")
+    sip_plan.add_argument("--provider", choices=("elevenlabs", "xai"), required=True)
+    sip_plan.add_argument("--number", required=True, help="WhatsApp business number in E.164 form, e.g. +15550100000")
+    sip_plan.add_argument("--control-url", help="xAI only: public https://.../webhooks/xai-sip URL of this server")
+    sip_plan.set_defaults(func=cmd_sip_plan)
     tools = commands.add_parser("tools", help="Inspect and exercise tools offline").add_subparsers(dest="tools_command", required=True)
     tools.add_parser("schema", help="Print tool definitions sent to the provider").set_defaults(func=cmd_tools_schema)
     call = tools.add_parser("call", help="Run one tool against the configured calendar (Cal.com, or the local development one)")

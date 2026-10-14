@@ -11,6 +11,11 @@ WhatsApp call → Kapso signed webhook → this server (Pipecat SmallWebRTC)
              ↔ ElevenLabs Agents or Grok Voice (speech, LLM, voice) ↔ your tools ↔ Cal.com
 ```
 
+The voice provider runs the conversation. This server answers the WhatsApp call and carries its
+audio, also with ElevenLabs. Your number and messages stay in Kapso.
+[`docs/choose-where-calls-run.md`](docs/choose-where-calls-run.md) compares this with Pipecat Cloud
+and with provider-hosted SIP.
+
 The starter includes:
 
 - **Riley**, an AI receptionist for your business. Riley says it is an AI, answers questions
@@ -69,7 +74,8 @@ xAI keeps API traffic for 30 days.
 
 You need a Kapso project with a dedicated WhatsApp number that has Calling enabled, and a host
 for this server ([`docs/providers-and-hosting.md`](docs/providers-and-hosting.md) compares them:
-a VPS with a public IP, or Railway with a TURN relay):
+a VPS with a public IP, or Railway with a TURN relay). To run each call in Pipecat Cloud instead,
+see [`examples/pipecat-cloud`](examples/pipecat-cloud). This server needs:
 
 - **Public HTTPS** for the webhooks from Kapso.
 - **UDP to Meta** for the call audio, or a TURN server in `ICE_SERVERS_JSON`. An HTTPS tunnel
@@ -89,8 +95,9 @@ dashboard voice agent, see [step 6 of the deploy guide](docs/deploy.md#6-connect
 
 ## Docs
 
+- [`docs/choose-where-calls-run.md`](docs/choose-where-calls-run.md): this server, Pipecat Cloud or provider SIP; what each needs and what is proven
 - [`docs/calendar.md`](docs/calendar.md): Cal.com setup, what each tool does, and a walkthrough to record
-- [`docs/providers-and-hosting.md`](docs/providers-and-hosting.md): ElevenLabs or Grok Voice, and where to host
+- [`docs/providers-and-hosting.md`](docs/providers-and-hosting.md): ElevenLabs or Grok Voice, and where to host this server
 - [`docs/deploy.md`](docs/deploy.md): hosting, networking, Kapso setup and costs
 - [`docs/deploy-railway.md`](docs/deploy-railway.md): Railway with a TURN relay, and a one-click template
 - [`docs/customize.md`](docs/customize.md): your business, greeting, prompt and tools
@@ -100,6 +107,9 @@ dashboard voice agent, see [step 6 of the deploy guide](docs/deploy.md#6-connect
 - [`docs/security.md`](docs/security.md): operator access, caller isolation and logging
 - [`docs/architecture.md`](docs/architecture.md) and [`docs/contracts.md`](docs/contracts.md):
   call flow, source map and HTTP contracts
+- Examples: [`examples/pipecat-cloud`](examples/pipecat-cloud) (each call in Pipecat Cloud),
+  [`examples/elevenlabs-sip`](examples/elevenlabs-sip) and [`examples/xai-sip`](examples/xai-sip)
+  (provider SIP; blocked for WhatsApp today), [`examples/vps`](examples/vps)
 
 ## License
 

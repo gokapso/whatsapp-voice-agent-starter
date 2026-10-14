@@ -158,7 +158,7 @@ class CallManager:
             self.remember(call_id, "invalid")
             self.log.add("ignored_connect_without_offer", call_ref(call_id))
             return
-        if not self.settings.calls_ready:
+        if not self.settings.answer_ready:
             raise NotReady()
         if self.busy():
             self.remember(call_id, "rejected")
