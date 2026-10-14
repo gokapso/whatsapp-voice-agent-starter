@@ -16,9 +16,23 @@ def call_ref(call_id):
     return "call-" + hashlib.sha256(call_id.encode()).hexdigest()[:16]
 
 
+# Why the voice provider last refused a session, for the operator console. A short code only;
+# never the provider's message, which can echo request details.
+PROVIDER_PROBLEMS = ("auth", "rate_limited", "not_found", "unreachable", "failed")
+
+
 class EventLog:
     def __init__(self, size=200):
         self.events = deque(maxlen=size)
+        self.provider_problem = None
+
+    def provider_failed(self, problem, ref=None):
+        problem = problem if problem in PROVIDER_PROBLEMS else "failed"
+        self.provider_problem = {"problem": problem, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        self.add("provider_problem_" + problem, ref)
+
+    def provider_ok(self):
+        self.provider_problem = None
 
     def add(self, event, ref=None, **fields):
         event = event.lower()

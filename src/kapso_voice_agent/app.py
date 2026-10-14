@@ -6,7 +6,7 @@ Public (expose through your HTTPS ingress):
 
 Operator (bearer OPERATOR_TOKEN; returns 404 when the token is unset):
   GET  /operator/                         console page (contains no secrets)
-  GET  /operator/api/state                readiness, recording state, active calls, event log, artifact notices
+  GET  /operator/api/state                readiness, voice provider, recording state, active calls, event log, artifact notices
   POST /operator/api/browser-call         {sdp} -> SDP answer; test the agent from a browser
   POST /operator/api/calls/{ref}/hangup   end a browser or outbound call
   POST /operator/api/outbound/permission  {recipient} (needs ENABLE_OUTBOUND=1)
@@ -183,10 +183,18 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
 
     api = APIRouter(prefix="/operator/api", dependencies=[Depends(operator)])
 
+    def voice_status():
+        """Which provider a browser call would talk to. Names only; never a key."""
+        grok = settings.voice_provider == "grok"
+        return {"provider": settings.voice_provider, "label": "Grok Voice" if grok else "ElevenLabs Agents",
+                "model": spec.grok["model"] if grok else None, "voice": spec.grok["voice"] if grok else None,
+                "offline_fake_agent": bool(settings.dev_agent_ws_url), "problem": log.provider_problem}
+
     @api.get("/state")
     async def state():
         return {"calls_ready": settings.calls_ready, "agent_ready": settings.agent_ready,
                 "agent_missing": settings.agent_missing(),  # setting names only, never values
+                "voice": voice_status(), "calendar": settings.calendar or None,
                 "outbound_enabled": settings.enable_outbound, "local_capture": settings.local_capture,
                 "recording": manager.recording.status(),
                 "max_concurrent_calls": settings.max_concurrent_calls, "busy": manager.busy(),

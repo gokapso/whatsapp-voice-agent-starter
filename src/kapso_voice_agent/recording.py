@@ -17,6 +17,11 @@ reaches the greeting within that time, or at once after a restart.
 
 The offline fake agent (DEV_AGENT_WS_URL) records nothing and is never read over the network.
 "Recording on" means the setting is enabled. It does not prove that bytes were saved.
+
+Grok Voice (VOICE_PROVIDER=grok) has no stored agent to read. xAI stores API requests and
+responses for 30 days by default, and voice agent conversations are not persisted only for teams
+with Zero Data Retention (https://docs.x.ai/docs/resources/faq-api/security). This server cannot
+check a team's retention setting, so Grok calls always say "This call is recorded."
 """
 
 import asyncio
@@ -40,7 +45,7 @@ class RecordingUnknown(Exception):
 class Recording:
     provider: bool      # ElevenLabs record_voice as read back; False for the offline fake agent
     local: bool         # LOCAL_CAPTURE on this server
-    source: str         # "provider_readback" or "offline_fake_agent"
+    source: str         # "provider_readback", "xai_default_retention" or "offline_fake_agent"
 
     @property
     def recorded(self):
@@ -77,6 +82,8 @@ class RecordingCheck:
         settings = self.settings
         if settings.dev_agent_ws_url:
             return Recording(provider=False, local=settings.local_capture, source="offline_fake_agent")
+        if settings.voice_provider == "grok":
+            return Recording(provider=True, local=settings.local_capture, source="xai_default_retention")
         async with self.lock:
             if self.cached and self.clock() - self.checked_at < CHECK_TTL_SECONDS:
                 return self.cached
@@ -110,6 +117,8 @@ class RecordingCheck:
         settings = self.settings
         if settings.dev_agent_ws_url:
             provider = "off (offline fake agent)"
+        elif settings.voice_provider == "grok":
+            provider = "on"  # xAI's default 30-day retention; see the module docstring
         elif self.cached and self.clock() - self.checked_at < CHECK_TTL_SECONDS:
             provider = "on" if self.cached.provider else "off"
         elif self.last_error:

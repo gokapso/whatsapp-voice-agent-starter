@@ -56,6 +56,15 @@ daily_limit = 10
 record_audio = true
 retention_days = 7
 
+[grok]
+# Used only with VOICE_PROVIDER=grok: xAI Grok Voice runs speech recognition, the LLM and the
+# voice in one realtime session. It shares the prompt, greetings, tools and limits in this file
+# and sends [asr] keywords as transcription hints. [voice], [turn] and [privacy] are ElevenLabs
+# settings and do not apply. grok-voice-3.0 is pinned; grok-voice-latest follows xAI's newest model.
+model = "grok-voice-3.0"
+# A built-in xAI voice ID (GET https://api.x.ai/v1/tts/voices lists them) or a custom voice ID.
+voice = "eve"
+
 [greetings]
 # {assistant} comes from [agent]; {business} is business_name in business.json, and {at_business}
 # is " at <business_name>" or nothing while the name is empty. {recording} becomes

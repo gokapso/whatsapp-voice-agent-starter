@@ -182,7 +182,7 @@ class TestSetupReadiness:
         assert state["agent_ready"] is False and offer.status_code == 503 and "CALLER_KEY_SECRET" in offer.json()["detail"]
         assert state["agent_missing"] == ["CALLER_KEY_SECRET (or WHATSAPP_WEBHOOK_SECRET)"]
 
-    def test_init_env_writes_a_private_reusable_file_and_shows_the_token(self, tmp_path, capsys, monkeypatch):
+    def test_init_env_writes_a_private_reusable_file_and_never_prints_the_key(self, tmp_path, capsys, monkeypatch):
         for key in list(os.environ):
             if key.startswith(("KAPSO_", "ELEVENLABS_", "WHATSAPP_", "OPERATOR_", "CALLER_", "DEV_AGENT_")):
                 monkeypatch.delenv(key)
@@ -192,7 +192,8 @@ class TestSetupReadiness:
         settings = load_settings(env_file=path)
         assert mode(path) == "0o600"
         assert settings.operator_enabled and settings.agent_ready and settings.dev_agent_ws_url == "ws://127.0.0.1:8765"
-        assert settings.operator_token in printed and settings.caller_key_secret not in printed
+        assert settings.operator_token not in printed and settings.caller_key_secret not in printed
+        assert "console-key" in printed and settings.voice_provider == "elevenlabs"
         assert not settings.kapso_api_key and not settings.elevenlabs_api_key
         with pytest.raises(SystemExit):
             cli.main(["dev", "init-env", "--path", str(path)])
