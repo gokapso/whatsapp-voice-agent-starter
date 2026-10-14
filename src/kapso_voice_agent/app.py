@@ -34,6 +34,7 @@ from .events import EventLog
 from .outbound import OutboundError
 from .private import private_dir, prune_local_artifacts
 from .recording import RecordingUnknown
+from .turn import TurnUnavailable
 
 STATIC = Path(__file__).parent / "static"
 MAX_WEBHOOK_BYTES = 1_000_000
@@ -209,6 +210,10 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             ref, answer = await manager.start_browser_call(offer.sdp)
         except RecordingUnknown:
             raise HTTPException(503, "Could not read the agent's recording setting; no call started") from None
+        except TurnUnavailable:
+            log.add("turn_credentials_failed")
+            raise HTTPException(503, "Could not get TURN relay credentials; no call started. "
+                                     "Check CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN") from None
         except RuntimeError as error:
             if str(error) == "busy":
                 raise HTTPException(409, "Already at MAX_CONCURRENT_CALLS") from None

@@ -62,6 +62,20 @@ def make_connection(ice_json):
     return SmallWebRTCConnection(ice_servers=servers, connection_timeout_secs=30)
 
 
+def media_path(connection):
+    """How the call's audio flows: "relay" (through TURN), "direct" (host or STUN-mapped address) or
+    "unknown". Reads aiortc's selected ICE pair; best effort, for the operator log only."""
+    try:
+        transceiver = connection.pc.getTransceivers()[0]
+        pairs = list(transceiver.sender.transport.transport._connection._nominated.values())
+    except (AttributeError, IndexError, TypeError):
+        return "unknown"
+    if not pairs:
+        return "unknown"
+    types = {pairs[0].local_candidate.type, pairs[0].remote_candidate.type}
+    return "relay" if "relay" in types else "direct"
+
+
 def meta_sdp(sdp):
     """Meta accepts only the sha-256 DTLS fingerprint; drop the others aiortc offers."""
     return "\r\n".join(line for line in sdp.splitlines()
@@ -261,7 +275,7 @@ class AgentSession:
 
         @self.transport.event_handler("on_client_connected")
         async def connected(transport, client):
-            log.add("rtc_connected", ref)
+            log.add("rtc_connected", ref, media=media_path(connection))
 
         @self.transport.event_handler("on_client_disconnected")
         async def disconnected(transport, client):

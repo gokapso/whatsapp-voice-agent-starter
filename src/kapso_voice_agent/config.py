@@ -52,6 +52,11 @@ class Settings:
     operator_token: str = ""
     caller_key_secret: str = ""
     ice_servers_json: str = "[]"
+    # "" (ICE_SERVERS_JSON as is) or "cloudflare" (per-call TURN credentials; see turn.py)
+    turn_provider: str = ""
+    cloudflare_turn_key_id: str = ""
+    cloudflare_turn_api_token: str = ""
+    turn_transport: str = "tls"
     max_session_seconds: int = 320
     max_concurrent_calls: int = 1
     enable_outbound: bool = False
@@ -132,6 +137,15 @@ def load_settings(environ=None, env_file=None):
     if calendar == "calcom" and not cal_api_key:
         raise ConfigError("CALENDAR=calcom needs CAL_API_KEY")
 
+    turn_provider = get("TURN_PROVIDER").lower()
+    if turn_provider not in ("", "cloudflare"):
+        raise ConfigError("TURN_PROVIDER must be cloudflare or empty")
+    if turn_provider and not (get("CLOUDFLARE_TURN_KEY_ID") and get("CLOUDFLARE_TURN_API_TOKEN")):
+        raise ConfigError("TURN_PROVIDER=cloudflare needs CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN")
+    turn_transport = get("TURN_TRANSPORT").lower() or "tls"
+    if turn_transport not in ("tls", "tcp", "udp"):
+        raise ConfigError("TURN_TRANSPORT must be tls (default), tcp or udp")
+
     voice_provider = get("VOICE_PROVIDER").lower() or "elevenlabs"
     if voice_provider not in VOICE_PROVIDERS:
         raise ConfigError("VOICE_PROVIDER must be elevenlabs (default) or grok")
@@ -152,6 +166,10 @@ def load_settings(environ=None, env_file=None):
         operator_token=operator_token,
         caller_key_secret=get("CALLER_KEY_SECRET"),
         ice_servers_json=ice,
+        turn_provider=turn_provider,
+        cloudflare_turn_key_id=get("CLOUDFLARE_TURN_KEY_ID"),
+        cloudflare_turn_api_token=get("CLOUDFLARE_TURN_API_TOKEN"),
+        turn_transport=turn_transport,
         max_session_seconds=_int(get("MAX_SESSION_SECONDS", "320"), "MAX_SESSION_SECONDS", 30, 3600),
         max_concurrent_calls=_int(get("MAX_CONCURRENT_CALLS", "1"), "MAX_CONCURRENT_CALLS", 1, 20),
         enable_outbound=_flag(get("ENABLE_OUTBOUND", "0"), "ENABLE_OUTBOUND"),

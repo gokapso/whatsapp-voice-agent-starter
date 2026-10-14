@@ -512,7 +512,8 @@ def parser():
 
     serve = commands.add_parser("serve", help="Run the webhook receiver, bridge and operator console")
     serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8080)
+    serve.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8080),
+                       help="Default: $PORT (set by hosts such as Railway), else 8080")
     serve.set_defaults(func=cmd_serve)
 
     agent = commands.add_parser("agent", help="ElevenLabs agent config").add_subparsers(dest="agent_command", required=True)
