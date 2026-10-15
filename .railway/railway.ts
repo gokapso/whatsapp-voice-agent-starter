@@ -28,6 +28,8 @@ export default defineRailway(() => {
       // Without ports. healthcheck.railway.app is the host Railway's deploy health check uses.
       ALLOWED_HOSTS: "${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1",
       ICE_SERVERS_JSON: '[{"urls":"stun:stun.cloudflare.com:3478"}]',
+      // At startup the server makes itself the number's Meta webhook in Kapso, if the number has none.
+      KAPSO_REGISTER_WEBHOOK: "1",
       VOICE_PROVIDER: preserve(),
       XAI_API_KEY: preserve(),
       ELEVENLABS_API_KEY: preserve(),

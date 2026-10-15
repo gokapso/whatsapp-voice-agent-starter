@@ -90,6 +90,22 @@ class TestApplyGuards:
         assert result == {"created": True, "webhook_id": "w2", "active": True}
         assert bodies[0]["whatsapp_webhook"]["kind"] == "meta" and bodies[0]["whatsapp_webhook"]["secret_key"] == settings.webhook_secret
 
+    @pytest.mark.parametrize("existing,outcome,posted", [
+        ([], "registered", True),
+        ([{"id": "w1", "url": "https://voice.example.test/webhooks/whatsapp"}], "present", False),
+        ([{"id": "w1", "url": "https://old.example/x"}], "other", False),
+    ])
+    def test_startup_registration_creates_only_when_the_number_has_no_webhook(self, settings, existing, outcome, posted):
+        calls = []
+
+        def routes(request):
+            if request.method == "POST":
+                return httpx.Response(201, json={"data": {"id": "w2", "active": True}})
+            return httpx.Response(200, json={"data": existing})
+        url = "https://voice.example.test/webhooks/whatsapp"
+        assert provider.ensure_webhook(settings, url, self.client(routes, calls)) == outcome
+        assert ("POST" in [m for m, _ in calls]) is posted
+
     def test_agent_with_other_name_is_not_modified(self, settings, spec):
         calls = []
         client = self.client(lambda r: httpx.Response(200, json={"name": "Someone else's agent"}), calls)

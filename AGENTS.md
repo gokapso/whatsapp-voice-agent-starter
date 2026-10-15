@@ -49,7 +49,9 @@ uvx ruff check src tests scripts          # lint
 
 Commands that touch a provider are dry runs unless `--yes` is given: `agent apply`
 (`--save-agent-id` also writes a newly created agent's ID to the env file), `kapso webhook`,
-`railway variables`.
+`railway variables`. The one startup write is opt-in: with `KAPSO_REGISTER_WEBHOOK=1` (set for
+Railway) the server registers its own URL as the number's Meta webhook, only when the number has
+none (`app.register_webhook`, `provider.ensure_webhook`).
 `agent verify`, `calendar check` and `artifacts fetch` are read-only network calls. With Cal.com
 configured, `tools call` reads the real calendar and refuses book/reschedule/cancel without `--yes`. `agent verify` compares every
 value the repo sends, including the full prompt and each tool's description, parameters and

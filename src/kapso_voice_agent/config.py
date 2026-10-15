@@ -52,6 +52,10 @@ class Settings:
     operator_token: str = ""
     caller_key_secret: str = ""
     ice_servers_json: str = "[]"
+    # KAPSO_REGISTER_WEBHOOK=1: at startup, point the number's Meta webhook at this server when the
+    # number has none (app.register_webhook). Needs the host's public name: RAILWAY_PUBLIC_DOMAIN.
+    register_webhook: bool = False
+    public_domain: str = ""
     max_session_seconds: int = 320
     max_concurrent_calls: int = 1
     enable_outbound: bool = False
@@ -158,6 +162,8 @@ def load_settings(environ=None, env_file=None):
         operator_token=operator_token,
         caller_key_secret=get("CALLER_KEY_SECRET"),
         ice_servers_json=ice,
+        register_webhook=_flag(get("KAPSO_REGISTER_WEBHOOK", "0"), "KAPSO_REGISTER_WEBHOOK"),
+        public_domain=get("RAILWAY_PUBLIC_DOMAIN"),
         max_session_seconds=_int(get("MAX_SESSION_SECONDS", "320"), "MAX_SESSION_SECONDS", 30, 3600),
         max_concurrent_calls=_int(get("MAX_CONCURRENT_CALLS", "1"), "MAX_CONCURRENT_CALLS", 1, 20),
         enable_outbound=_flag(get("ENABLE_OUTBOUND", "0"), "ENABLE_OUTBOUND"),

@@ -6,6 +6,7 @@ Apply paths refuse to overwrite things they did not create:
   its stored name equals agent.toml's name. Every apply ends with a read-back comparison.
 - Kapso: create a phone-number webhook with kind "meta" only when the number has none. Only one
   Meta webhook is allowed per number, and replacing one would move other Meta events too.
+  `ensure_webhook` is the startup form (KAPSO_REGISTER_WEBHOOK=1) of the same rule.
 """
 
 import json
@@ -127,25 +128,48 @@ def webhook_plan(settings, url):
                     "Choosing whether a dashboard-assigned agent or this server answers the number's calls"]}
 
 
-def apply_webhook(settings, url, client):
+def meta_webhooks(settings, url, client):
+    """The number's Meta webhooks, after checking the URL and the settings a webhook needs."""
     check_public_url(url)
     if not (settings.kapso_api_key and settings.phone_number_id and settings.webhook_secret):
         raise SetupError("Set KAPSO_API_KEY, WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_WEBHOOK_SECRET first")
-    base = f"{KAPSO_PLATFORM}/whatsapp/phone_numbers/{quote(settings.phone_number_id, safe='')}/webhooks"
-    headers = {"X-API-Key": settings.kapso_api_key}
-    existing = client.get(base, params={"kind": "meta"}, headers=headers)
+    existing = client.get(webhooks_url(settings), params={"kind": "meta"}, headers={"X-API-Key": settings.kapso_api_key})
     if existing.is_error:
         raise SetupError(f"Webhook list HTTP {existing.status_code}")
-    rows = existing.json().get("data") or []
-    if rows:
-        hosts = sorted({urlparse(str(row.get("url", ""))).hostname or "?" for row in rows if isinstance(row, dict)})
-        raise SetupError(f"This number already has a Meta webhook ({', '.join(hosts)}). Reuse or update it deliberately.")
-    created = client.post(base, headers=headers, json={"whatsapp_webhook": {
+    return [row for row in existing.json().get("data") or [] if isinstance(row, dict)]
+
+
+def webhooks_url(settings):
+    return f"{KAPSO_PLATFORM}/whatsapp/phone_numbers/{quote(settings.phone_number_id, safe='')}/webhooks"
+
+
+def create_webhook(settings, url, client):
+    created = client.post(webhooks_url(settings), headers={"X-API-Key": settings.kapso_api_key}, json={"whatsapp_webhook": {
         "kind": "meta", "url": url, "secret_key": settings.webhook_secret, "active": True}})
     if created.is_error:
         raise SetupError(f"Webhook create HTTP {created.status_code}")
-    data = created.json().get("data") or {}
+    return created.json().get("data") or {}
+
+
+def apply_webhook(settings, url, client):
+    rows = meta_webhooks(settings, url, client)
+    if rows:
+        hosts = sorted({urlparse(str(row.get("url", ""))).hostname or "?" for row in rows})
+        raise SetupError(f"This number already has a Meta webhook ({', '.join(hosts)}). Reuse or update it deliberately.")
+    data = create_webhook(settings, url, client)
     return {"created": True, "webhook_id": data.get("id"), "active": data.get("active")}
+
+
+def ensure_webhook(settings, url, client):
+    """"registered" (created now), "present" (already this URL, e.g. after a restart) or "other"
+    (another URL receives the number's Meta events; it is left alone)."""
+    rows = meta_webhooks(settings, url, client)
+    if any(row.get("url") == url for row in rows):
+        return "present"
+    if rows:
+        return "other"
+    create_webhook(settings, url, client)
+    return "registered"
 
 
 def redact(text, settings):

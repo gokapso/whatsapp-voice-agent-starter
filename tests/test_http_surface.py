@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 import json
 
+import httpx
 import pytest
 
 from conftest import TOKEN, KapsoRecorder, asgi_client, fixture, post_webhook, sign
@@ -271,3 +272,50 @@ class TestOperatorSurface:
                 blocked = await client.get("/healthz")
             return ok.status_code, blocked.status_code
         assert run(go()) == (200, 400)
+
+
+class TestWebhookOnBoot:
+    """KAPSO_REGISTER_WEBHOOK=1 (Railway): the server makes itself the number's Meta webhook once."""
+
+    def boot(self, settings, spec, store, handler):
+        async def go():
+            app = create_app(settings, spec, store, kapso_factory=KapsoRecorder().factory(),
+                             platform_transport=httpx.MockTransport(handler))
+            async with app.router.lifespan_context(app):
+                for _ in range(200):
+                    if any(e["event"].startswith("kapso_webhook_") for e in app.state.log.events):
+                        break
+                    await asyncio.sleep(0.01)
+                async with asgi_client(app) as client:
+                    return (await client.get("/operator/api/state", headers={"authorization": f"Bearer {TOKEN}"})).json()
+        return asyncio.run(go())
+
+    def test_registers_this_servers_url_with_the_webhook_secret(self, settings, spec, store):
+        bodies = []
+
+        def handler(request):
+            if request.method == "POST":
+                bodies.append(json.loads(request.content))
+                return httpx.Response(201, json={"data": {"id": "w1", "active": True}})
+            return httpx.Response(200, json={"data": []})
+        state = self.boot(replace(settings, register_webhook=True, public_domain="voice.example.test"), spec, store, handler)
+        assert state["kapso_webhook"] == "registered"
+        webhook = bodies[0]["whatsapp_webhook"]
+        assert webhook["url"] == "https://voice.example.test/webhooks/whatsapp" and webhook["secret_key"] == settings.webhook_secret
+        assert settings.webhook_secret not in json.dumps(state)
+
+    def test_kapso_errors_and_a_missing_domain_never_stop_the_server(self, settings, spec, store):
+        requests = []
+
+        def failing(request):
+            requests.append(request)
+            return httpx.Response(500, json={})
+        failed = self.boot(replace(settings, register_webhook=True, public_domain="voice.example.test"), spec, store, failing)
+        no_domain = self.boot(replace(settings, register_webhook=True), spec, store, failing)
+        assert failed["kapso_webhook"] == "failed" and no_domain["kapso_webhook"] == "missing_settings"
+        assert len(requests) == 1  # the missing domain made no request
+
+    def test_off_by_default(self, settings, spec, store):
+        def refuse(request):
+            raise AssertionError("no Kapso request without KAPSO_REGISTER_WEBHOOK=1")
+        assert self.boot(settings, spec, store, refuse)["kapso_webhook"] is None

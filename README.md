@@ -67,12 +67,10 @@ set the variables with `uv run voice-agent railway variables --yes`, then `railw
 
 ### 4. Connect your Kapso number
 
-Register the server as your number's webhook in Kapso:
-
-```sh
-uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp         # dry run
-uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp --yes
-```
+On Railway, this happens by itself: at startup the server registers its URL as your number's
+webhook in Kapso, if the number has none. Open the console on your Railway URL: the WhatsApp row
+says whether the webhook points to this server. On other hosts, register it with
+`uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp --yes`.
 
 ### 5. Call the number from a phone
 

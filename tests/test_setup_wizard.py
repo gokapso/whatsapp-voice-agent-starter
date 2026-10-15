@@ -92,6 +92,7 @@ def test_export_for_railway_adds_host_settings_and_leaves_out_local_only_ones(tm
     assert "XAI_API_KEY" in keys and "OPERATOR_TOKEN" in keys and "RAILWAY_RUN_UID" in keys
     assert "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1" in lines
     assert "ICE_SERVERS_JSON=" + setup_wizard.RAILWAY_ICE_SERVERS in lines  # the STUN-only setup a real call proved
+    assert "KAPSO_REGISTER_WEBHOOK=1" in lines
     assert "DEV_AGENT_WS_URL" not in keys and "DATA_DIR" not in keys
     notes = "\n".join(printed)
     assert "CALENDAR=local" in notes and "TURN" not in notes

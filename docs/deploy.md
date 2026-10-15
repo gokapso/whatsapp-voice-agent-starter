@@ -59,6 +59,10 @@ railway up --detach                            # builds the Dockerfile and deplo
 - `ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1`: Railway's health
   check uses the host `healthcheck.railway.app`, and the image's own health check uses `127.0.0.1`.
 - `ICE_SERVERS_JSON` with a public STUN server, unless your `.env` file sets its own.
+- `KAPSO_REGISTER_WEBHOOK=1`: at startup the server registers
+  `https://$RAILWAY_PUBLIC_DOMAIN/webhooks/whatsapp` as the number's Meta webhook in Kapso, with
+  `WHATSAPP_WEBHOOK_SECRET`. It does this only when the number has no Meta webhook, and never
+  replaces one.
 
 These commands were run with Railway CLI 5.12. If your CLI asks something else, follow its
 prompts.
@@ -95,16 +99,18 @@ with a public IP.
    calls**). Kapso's messaging sandbox is not a Calling number.
 2. Make sure nothing else answers the calls: no dashboard voice agent on the number, and no
    answering from the Inbox.
-3. Register the server as the number's Meta webhook:
+3. Point the number's Meta webhook at the server. On Railway the server does it at startup
+   (`KAPSO_REGISTER_WEBHOOK=1`); the console's WhatsApp row shows the result. On other hosts:
 
    ```sh
    uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp          # dry run
    uv run voice-agent kapso webhook --url https://<host>/webhooks/whatsapp --yes    # stops if one exists
    ```
 
-A number has only one Meta webhook. If one exists, the command stops. Change it on purpose in the
-dashboard, because it also sends other Meta events, such as messages, to this URL. This server
-uses only `calls` changes for `WHATSAPP_PHONE_NUMBER_ID` and ignores the rest.
+A number has only one Meta webhook. If one exists, neither the command nor the server replaces
+it, and the console says so. Change it on purpose in the dashboard, because it also sends other
+Meta events, such as messages, to this URL. Then restart the server. This server uses only
+`calls` changes for `WHATSAPP_PHONE_NUMBER_ID` and ignores the rest.
 
 On a call, Kapso signs the Meta event with `WHATSAPP_WEBHOOK_SECRET` and posts it to the server.
 The server reads the recording setting, answers with `pre_accept` and `accept` through Kapso, and

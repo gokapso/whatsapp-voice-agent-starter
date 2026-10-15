@@ -158,6 +158,14 @@ const PROBLEMS = {
   failed: voice => `${vendor(voice)} ended the session before it was ready. Open the technical event log for details, then try again.`,
 };
 
+// KAPSO_REGISTER_WEBHOOK=1: why the server could not make itself the number's webhook.
+const WEBHOOK_PROBLEMS = {
+  other: ['Your number sends its webhook to another server. Remove that webhook in the Kapso dashboard, then restart this server.'],
+  failed: ['Unable to register this server as the webhook of your number. Check ', {code: 'KAPSO_API_KEY'}, ' and ',
+    {code: 'WHATSAPP_PHONE_NUMBER_ID'}, ', then restart this server.'],
+  missing_settings: ['Unable to register the webhook: this server has no public domain. Add one in Railway, then restart this server.'],
+};
+
 function connectedWhatsAppCall() {
   return state.recent_calls.find(call => call.kind !== 'browser' && call.connected_at);
 }
@@ -187,6 +195,9 @@ function nextStep() {
   if (state.whatsapp_missing.length) {
     return {blocking: false, parts: ['Next: after a good test call, host this server and connect your WhatsApp number. See ',
       {code: 'docs/deploy.md'}, '.']};
+  }
+  if (WEBHOOK_PROBLEMS[state.kapso_webhook]) {
+    return {blocking: false, parts: WEBHOOK_PROBLEMS[state.kapso_webhook]};
   }
   const call = connectedWhatsAppCall();
   if (!call) {
@@ -269,11 +280,14 @@ function renderSetup() {
 
   if (state.whatsapp_missing.length) {
     rows.push(setupRow('WhatsApp', 'info', 'Not connected', ['Needs ', ...codeList(state.whatsapp_missing), '.']));
+  } else if (WEBHOOK_PROBLEMS[state.kapso_webhook]) {
+    rows.push(setupRow('WhatsApp', 'todo', 'Webhook not connected', WEBHOOK_PROBLEMS[state.kapso_webhook]));
   } else {
     const call = connectedWhatsAppCall();
+    const webhook = ['registered', 'present'].includes(state.kapso_webhook) ? 'The webhook of the number points to this server. ' : '';
     rows.push(setupRow('WhatsApp', call ? 'ok' : 'info', 'Configured through Kapso', call
       ? `A call connected at ${clock.format(new Date(call.connected_at))}.`
-      : 'Not proven yet. Call the number from a phone.'));
+      : `${webhook}Not proven yet. Call the number from a phone.`));
   }
 
   rows.push(state.outbound_enabled

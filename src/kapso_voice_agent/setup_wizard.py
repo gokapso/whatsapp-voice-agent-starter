@@ -257,7 +257,9 @@ def server_variables(path, target):
     if target == "railway":
         # Railway mounts volumes as root; the entrypoint hands DATA_DIR to the app user and drops root.
         # Host names without ports: Railway's deploy health check and the image's own health check.
-        lines += ["RAILWAY_RUN_UID=0", "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1"]
+        # The server makes itself the number's webhook at startup when the number has none.
+        lines += ["RAILWAY_RUN_UID=0", "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1",
+                  "KAPSO_REGISTER_WEBHOOK=1"]
     if values.get("CALENDAR") == "local":
         notes.append("CALENDAR=local keeps bookings in the server's volume; use Cal.com for real callers.")
     if values.get("DEV_AGENT_WS_URL"):
