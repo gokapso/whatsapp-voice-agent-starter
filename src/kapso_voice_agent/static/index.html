@@ -87,19 +87,27 @@
       </section>
     </div>
 
-    <section id="outbound" class="panel" aria-labelledby="outbound-title" hidden>
+    <section id="outbound" class="panel" aria-labelledby="outbound-title">
       <h2 id="outbound-title">Call a WhatsApp number</h2>
-      <p class="hint">This rings a real phone, and Meta bills the call. The person must allow calls from your business first.</p>
-      <label for="recipient">WhatsApp number or business-scoped user ID</label>
-      <input id="recipient" type="tel" autocomplete="off" spellcheck="false" placeholder="15550100002"
-             aria-describedby="permission-hint">
-      <p id="permission-hint" class="hint">Include the country code. Check the permission before you call.</p>
-      <div class="actions">
-        <button id="permission" type="button" class="button secondary">Check permission</button>
-        <button id="dial" type="button" class="button primary" disabled>Call this person</button>
-        <button id="outbound-stop" type="button" class="button secondary" disabled>End call</button>
+      <p id="outbound-unready" class="hint" hidden>The agent can also call people. Finish the WhatsApp and voice provider
+        setup above first.</p>
+      <div id="outbound-form" hidden>
+        <p class="hint">This rings a real phone, and Meta bills the call. WhatsApp connects it only after the person allows
+          calls from your business.</p>
+        <label for="recipient">WhatsApp number or business-scoped user ID</label>
+        <input id="recipient" type="tel" autocomplete="off" spellcheck="false" placeholder="15550100002"
+               aria-describedby="permission-hint">
+        <p id="permission-hint" class="hint">Include the country code. If the person has not allowed calls yet,
+          <strong>Ask to allow calls</strong> sends them a WhatsApp message with a button to allow them. WhatsApp
+          delivers it only within 24 hours of their last message to your number.</p>
+        <div class="actions">
+          <button id="permission" type="button" class="button secondary">Check permission</button>
+          <button id="ask" type="button" class="button secondary">Ask to allow calls</button>
+          <button id="dial" type="button" class="button primary" disabled>Call this person</button>
+          <button id="outbound-stop" type="button" class="button secondary" hidden>End call</button>
+        </div>
+        <p id="outbound-status" class="call-status" role="status"></p>
       </div>
-      <p id="outbound-status" class="call-status" role="status"></p>
     </section>
 
     <details class="panel activity">

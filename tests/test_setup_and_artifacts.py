@@ -136,14 +136,14 @@ class TestSettings:
         ({"ICE_SERVERS_JSON": "{}"}, "ICE_SERVERS_JSON"),
         ({"WHATSAPP_PHONE_NUMBER_ID": "+1 555 010 0000"}, "numeric"),
         ({"MAX_CONCURRENT_CALLS": "0"}, "between"),
-        ({"ENABLE_OUTBOUND": "maybe"}, "0 or 1")])
+        ({"LOCAL_CAPTURE": "maybe"}, "0 or 1")])
     def test_rejects_unsafe_or_malformed_values(self, env, message):
         with pytest.raises(ConfigError, match=message):
             load_settings(environ=env)
 
     def test_defaults_are_conservative(self):
         settings = load_settings(environ={})
-        assert not settings.enable_outbound and not settings.local_capture and not settings.operator_enabled
+        assert not settings.local_capture and not settings.operator_enabled
         assert settings.max_concurrent_calls == 1 and not settings.calls_ready
 
 

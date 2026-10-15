@@ -83,6 +83,16 @@ class KapsoClient:
         key = "recipient" if recipient.startswith("US.") else "user_wa_id"
         return await self.request("GET", self.calls_path("call_permissions") + "?" + urlencode({key: recipient}))
 
+    async def request_call_permission(self, recipient, text):
+        """Meta's free-form call permission request: `text` and a button to allow calls. WhatsApp
+        delivers it only inside the person's 24-hour customer service window."""
+        target = "recipient" if recipient.startswith("US.") else "to"
+        body = {"messaging_product": "whatsapp", "recipient_type": "individual", target: recipient,
+                "type": "interactive", "interactive": {"type": "call_permission_request",
+                                                       "action": {"name": "call_permission_request"},
+                                                       "body": {"text": text}}}
+        return await self.request("POST", self.calls_path("messages"), body)
+
     async def connect(self, recipient, offer_sdp, callback_data="kapso-voice-agent-starter"):
         # No `recording`/`transcription` objects: Meta-native capture is not requested by default.
         target = "recipient" if recipient.startswith("US.") else "to"

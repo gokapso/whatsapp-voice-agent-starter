@@ -62,7 +62,7 @@ response settings; fields the provider adds by itself are ignored.
 | Goal | Edit | Then run |
 | --- | --- | --- |
 | What the agent says and how | `agent/prompt.md` | `voice-agent check`, `pytest tests/test_agent_config.py tests/test_tools.py` |
-| Greeting, voice, model, limits, recording | `agent/agent.toml` | `voice-agent agent plan` |
+| Greeting, voice, model, limits, recording, call permission request text | `agent/agent.toml` | `voice-agent agent plan` |
 | Business facts and services (Cal.com event types) | `agent/business.json` | `voice-agent calendar check` |
 | Tool arguments and descriptions | `src/kapso_voice_agent/tools.py` (Pydantic models + `TOOLS`) | `voice-agent tools schema` |
 | Calendar requests, booking ownership | `src/kapso_voice_agent/calcom.py` | `pytest tests/test_calcom.py` |
@@ -92,8 +92,7 @@ Tests enforce each of these. Do not weaken a test to make a change pass.
    of the raw body) before parsing. Only `calls` changes for `WHATSAPP_PHONE_NUMBER_ID` are used.
    A Pipecat Cloud launch is answered only after Kapso's API vouches for the call.
 2. **Operator controls are separate.** Everything under `/operator` needs `OPERATOR_TOKEN` and
-   returns 404 when it is unset. Outbound calling also needs `ENABLE_OUTBOUND=1`. No secret is
-   ever sent to the browser.
+   returns 404 when it is unset, outbound calling included. No secret is ever sent to the browser.
 3. **Caller isolation.** The caller identity comes from the call (BSUID or phone, HMAC-keyed),
    never from tool arguments. Tools have no identifier parameters; the caller's email is booking
    data, never a lookup key. Callers list, move and cancel only bookings in the local map under

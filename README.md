@@ -89,6 +89,19 @@ Call the number from WhatsApp. Riley answers. The console on your Railway URL sh
 under **Recent calls**. A configured number is not proof: only a phone call shows that WhatsApp
 audio reaches your server.
 
+### 6. Let Riley call you (optional)
+
+The console's **Call a WhatsApp number** panel calls people. WhatsApp connects a call from a
+business only after the person allows calls from it:
+
+1. From your phone, send the number any WhatsApp message. WhatsApp delivers the request in the
+   next step only within 24 hours of the person's last message.
+2. In the console, enter your phone's number and select **Ask to allow calls**. Your phone gets a
+   message with a button to allow calls. Allow them.
+3. **Call this person** turns on. Select it, and answer the phone.
+
+Every outbound call rings a real phone, and Meta bills it.
+
 ## Change the agent
 
 Point your coding agent (Claude Code, Cursor, Codex) at [`AGENTS.md`](AGENTS.md) and

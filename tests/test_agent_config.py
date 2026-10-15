@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from conftest import configured_agent
 from kapso_voice_agent.agent_config import build_config, load_spec, mismatches
 from kapso_voice_agent.config import REPO_ROOT
 from kapso_voice_agent.provider import validate_against_openapi
@@ -50,7 +51,7 @@ class TestDisclosure:
         assert "test call" not in on.lower()
 
     def test_nothing_the_agent_reads_frames_the_call_as_a_test_or_demo(self, spec, config):
-        spoken = [spec.prompt, spec.recording_status(True), spec.recording_status(False),
+        spoken = [spec.prompt, spec.recording_status(True), spec.recording_status(False), spec.permission_request,
                   *(spec.greeting(d, r) for d in ("inbound", "outbound") for r in (True, False)),
                   json.dumps(config["conversation_config"]["agent"]["prompt"]["tools"])]
         framing = re.compile(r"\b(tests?|testing|demo|fictional|simulat\w*|fake)\b", re.IGNORECASE)
@@ -75,6 +76,25 @@ class TestDisclosure:
         (tmp_path / "agent.toml").write_text(text)
         with pytest.raises(ValueError, match="AI"):
             load_spec(tmp_path / "agent.toml")
+
+
+def test_permission_request_text_names_the_business_and_is_checked(tmp_path):
+    spec = load_spec(configured_agent(tmp_path / "filled"))
+    assert spec.permission_request == f"Riley, the AI assistant at {spec.business.name}, would like to call you " \
+                                      "on WhatsApp about your appointment."
+    toml = (REPO_ROOT / "agent/agent.toml").read_text()
+    line = re.search(r"^permission_request = .*$", toml, re.MULTILINE).group(0)
+    for changed, error in ((toml.replace(line, line + '\ntone = "warm"'), "unknown keys"),
+                           (toml.replace(line, 'permission_request = "{recording}"'), "may use only"),
+                           (toml.replace(line, 'permission_request = " "'), "1 to 1024"),
+                           (toml.replace(line, f'permission_request = "{"x" * 1025}"'), "1 to 1024")):
+        directory = tmp_path / str(len(list(tmp_path.iterdir())))
+        directory.mkdir()
+        for name in ("prompt.md", "business.json"):
+            (directory / name).write_text((REPO_ROOT / "agent" / name).read_text())
+        (directory / "agent.toml").write_text(changed)
+        with pytest.raises(ValueError, match=error):
+            load_spec(directory / "agent.toml")
 
 
 def test_tested_route_settings_are_kept(config):

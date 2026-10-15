@@ -58,7 +58,6 @@ class Settings:
     public_domain: str = ""
     max_session_seconds: int = 320
     max_concurrent_calls: int = 1
-    enable_outbound: bool = False
     local_capture: bool = False
     capture_retention_days: int = 7
     capture_max_count: int = 20
@@ -166,7 +165,6 @@ def load_settings(environ=None, env_file=None):
         public_domain=get("RAILWAY_PUBLIC_DOMAIN"),
         max_session_seconds=_int(get("MAX_SESSION_SECONDS", "320"), "MAX_SESSION_SECONDS", 30, 3600),
         max_concurrent_calls=_int(get("MAX_CONCURRENT_CALLS", "1"), "MAX_CONCURRENT_CALLS", 1, 20),
-        enable_outbound=_flag(get("ENABLE_OUTBOUND", "0"), "ENABLE_OUTBOUND"),
         local_capture=_flag(get("LOCAL_CAPTURE", "0"), "LOCAL_CAPTURE"),
         capture_retention_days=_int(get("CAPTURE_RETENTION_DAYS", "7"), "CAPTURE_RETENTION_DAYS", 1, 90),
         capture_max_count=_int(get("CAPTURE_MAX_COUNT", "20"), "CAPTURE_MAX_COUNT", 1, 1000),

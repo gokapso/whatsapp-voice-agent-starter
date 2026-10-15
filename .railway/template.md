@@ -27,6 +27,9 @@ Before you deploy, in the Kapso dashboard:
 Test this server with a WhatsApp call. Browser test calls from the console need the server on
 your computer or on a server with a public IP.
 
+The agent can also call people from the console. It asks a person to allow calls with a WhatsApp
+message, and calls them once they do.
+
 ## Common Use Cases
 
 - An AI receptionist that answers WhatsApp calls and books appointments

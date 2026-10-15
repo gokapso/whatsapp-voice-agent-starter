@@ -97,7 +97,7 @@ def cmd_check(args):
         # Filled in by the owner before Cal.com bookings work; `calendar check` reads the account.
         "business_missing": spec.business.calcom_problems() if settings.calendar != "local" else [],
         "ready": {"calls": settings.calls_ready, "agent": settings.agent_ready, "operator_console": settings.operator_enabled,
-                  "outbound": settings.enable_outbound, "local_capture": settings.local_capture},
+                  "local_capture": settings.local_capture},
         "agent_missing": settings.agent_missing(),
         "set": sorted(k for k, v in {"CAL_API_KEY": settings.cal_api_key,
                                      "KAPSO_API_KEY": settings.kapso_api_key, "WHATSAPP_PHONE_NUMBER_ID": settings.phone_number_id,

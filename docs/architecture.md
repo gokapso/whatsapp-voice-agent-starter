@@ -49,11 +49,19 @@ token. The server checks the recording state, answers the offer, and starts the 
 session as a WhatsApp call, with a random per-call caller identity and the inbound greeting.
 There is no Kapso step.
 
-## Outbound call sequence (operator only, `ENABLE_OUTBOUND=1`)
+## Outbound call sequence (operator only)
 
 permission check → local SDP offer → `connect` → Meta's SDP answer (webhook, may arrive before
 the HTTP response) → apply → `ACCEPTED` status → start agent → same endings as inbound. A connect
 whose outcome is unknown is reported, never retried.
+
+Without permission, **Ask to allow calls** sends Meta's free-form call permission request through
+Kapso's `/messages` proxy: an interactive `call_permission_request` with `[outbound]
+permission_request` from `agent.toml` as its text. It is sent only when `call_permissions` says
+`send_call_permission_request` is allowed (Meta: one a day and two a week per person), once per
+click. WhatsApp delivers it only inside the person's 24-hour customer service window (error
+`131047` otherwise). The reply webhook (`call_permission_reply`) is not used: the console polls
+`call_permissions` until `start_call` is allowed.
 
 ## Pipecat Cloud session (`cloud.py`, `examples/pipecat-cloud`)
 
@@ -110,8 +118,9 @@ Small, stable interfaces. Change them only together with their tests.
 | `GET /operator/api/state` | `Authorization: Bearer <OPERATOR_TOKEN>` (the console access key) | — | readiness flags, `agent_missing` (setting names), `whatsapp_missing`, `kapso_webhook` (null when `KAPSO_REGISTER_WEBHOOK` is off\|`registered`\|`present`\|`other`\|`failed`\|`missing_settings`), `voice` `{provider: elevenlabs\|grok, label, model, voice, offline_fake_agent, setup_step: null\|api_key\|create_agent, problem: null\|{problem: auth\|billing\|rate_limited\|not_found\|unreachable\|failed, at}}`, `calendar` (`calcom`\|`local`\|null), `recording` `{provider_recording: on\|off\|unknown\|not_checked\|off (offline fake agent), local_capture, agent_toml_record_audio, next_greeting_says_recorded: true\|false\|null, last_check_error}`, active calls `{ref, direction, state}`, `recent_calls` (newest 6 in the event log: `{ref, kind, started_at, connected_at, last_at, media, tools, problem, active}`), events, native artifact notices |
 | `POST /operator/api/browser-call` | bearer | `{"sdp": "<offer>"}` | `{"ref", "type": "answer", "sdp"}`; 409 at capacity; 503 agent not ready (lists what is missing) or recording setting unknown |
 | `POST /operator/api/calls/{ref}/hangup` | bearer | — | `{"ended": true}`; 404 unknown ref |
-| `POST /operator/api/outbound/permission` | bearer + `ENABLE_OUTBOUND=1` | `{"recipient": "<E.164 digits or US.…>"}` | `{"permission_status", "can_call"}` |
-| `POST /operator/api/outbound/call` | bearer + `ENABLE_OUTBOUND=1` | `{"recipient"}` (extra fields rejected) | `{"ref", "state": "ringing" \| "terminated"}` |
+| `POST /operator/api/outbound/permission` | bearer | `{"recipient": "<E.164 digits or US.…>"}` | `{"permission_status": no_permission\|temporary\|permanent, "can_call", "can_request"}` |
+| `POST /operator/api/outbound/permission-request` | bearer | `{"recipient"}` | the same fields and `"sent"`; nothing is sent when calls are already allowed; 429 when Meta allows no more requests; 502 with the reason when Meta refuses |
+| `POST /operator/api/outbound/call` | bearer | `{"recipient"}` (extra fields rejected) | `{"ref", "state": "ringing" \| "terminated"}` |
 
 `ref` is `call-<16 hex>` (SHA-256 prefix of the Meta call ID) or `browser-<16 hex>`. Raw Meta call
 IDs never leave the process except in Kapso API calls.

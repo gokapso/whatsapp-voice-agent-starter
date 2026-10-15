@@ -72,3 +72,9 @@ voice = "eve"
 inbound = "Hi, thanks for calling! This is {assistant}, the AI assistant{at_business}.{recording} How can I help you today?"
 outbound = "Hi, it's {assistant}, the AI assistant{at_business}.{recording} I'm calling about your appointment. Is now a good time?"
 recording_notice = "This call is recorded."
+
+[outbound]
+# Before the console can call someone, WhatsApp needs their permission: "Ask to allow calls" sends
+# them this text with a button to allow calls from your business. Same placeholders as
+# [greetings], without {recording}.
+permission_request = "{assistant}, the AI assistant{at_business}, would like to call you on WhatsApp about your appointment."
