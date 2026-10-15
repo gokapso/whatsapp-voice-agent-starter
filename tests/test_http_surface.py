@@ -201,9 +201,11 @@ class TestOperatorSurface:
                 headers = {"authorization": header} if header else {}
                 state = await client.get("/operator/api/state", headers=headers)
                 call = await client.post("/operator/api/outbound/call", headers=headers, json={"recipient": "15550100002"})
+                ask = await client.post("/operator/api/outbound/permission-request", headers=headers,
+                                        json={"recipient": "15550100002"})
                 offer = await client.post("/operator/api/browser-call", headers=headers, json={"sdp": "x" * 20})
-            return state.status_code, call.status_code, offer.status_code
-        assert run(go()) == (401, 401, 401)
+            return state.status_code, call.status_code, ask.status_code, offer.status_code
+        assert run(go()) == (401, 401, 401, 401)
 
     def test_console_page_has_no_secrets_and_strict_headers(self, settings, spec, store):
         async def go():
@@ -247,9 +249,10 @@ class TestOperatorSurface:
             kapso = KapsoRecorder()
             async with asgi_client(make_app(settings, spec, store, kapso)) as client:
                 permission = await client.post("/operator/api/outbound/permission", headers=AUTH, json={"recipient": "15550100002"})
+                ask = await client.post("/operator/api/outbound/permission-request", headers=AUTH, json={"recipient": "15550100002"})
                 call = await client.post("/operator/api/outbound/call", headers=AUTH, json={"recipient": "15550100002"})
-            return permission.status_code, call.status_code, kapso.bodies
-        assert run(go()) == (403, 403, [])
+            return permission.status_code, ask.status_code, call.status_code, kapso.bodies
+        assert run(go()) == (403, 403, 403, [])
 
     def test_extra_fields_and_bad_refs_are_rejected(self, settings, spec, store):
         async def go():

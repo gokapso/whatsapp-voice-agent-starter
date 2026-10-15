@@ -3,6 +3,9 @@
 Order: permission check -> local SDP offer -> connect -> wait for Meta's SDP answer -> apply it ->
 wait for ACCEPTED (the person picked up) -> start the agent. A connect whose outcome is unknown
 (timeout, dropped connection) is never retried automatically: the phone may already be ringing.
+
+Without permission, the operator can send one call permission request (a WhatsApp message with a
+button to allow calls). Meta allows one per person a day and two a week.
 """
 
 import asyncio
@@ -38,9 +41,27 @@ def normalize_recipient(value):
     return number
 
 
-def can_start_call(permission):
-    return any(action.get("action_name") == "start_call" and action.get("can_perform_action") is True
+def can_perform(permission, name):
+    return any(action.get("action_name") == name and action.get("can_perform_action") is True
                for action in permission.get("actions", []) if isinstance(action, dict))
+
+
+def can_start_call(permission):
+    return can_perform(permission, "start_call")
+
+
+# Meta errors a permission request can meet, as the console explains them.
+REQUEST_ERRORS = {
+    "131047": "WhatsApp delivers this request only within 24 hours of the person's last message to "
+              "your number. Ask them to send your number any WhatsApp message, then try again.",
+    "131026": "This WhatsApp account cannot receive the request. The person may need to update WhatsApp.",
+}
+
+
+def summary(permission):
+    return {"permission_status": str((permission.get("permission") or {}).get("status", "unknown"))[:32],
+            "can_call": can_start_call(permission),
+            "can_request": can_perform(permission, "send_call_permission_request")}
 
 
 class OutboundCalls:
@@ -58,8 +79,33 @@ class OutboundCalls:
             data = await client.permissions(recipient)
         finally:
             await client.close()
-        return {"permission_status": str((data.get("permission") or {}).get("status", "unknown"))[:32],
-                "can_call": can_start_call(data)}
+        return summary(data)
+
+    async def request_permission(self, recipient):
+        """Send the call permission request, unless the person already allows calls or Meta's
+        limits forbid another request. Sent once per operator click, never retried."""
+        recipient = normalize_recipient(recipient)
+        log, client = self.manager.log, self.manager.kapso_factory()
+        try:
+            state = summary(await client.permissions(recipient))
+            if state["can_call"]:
+                return {**state, "sent": False}
+            if not state["can_request"]:
+                log.add("permission_request_limited")
+                raise OutboundError(429, "WhatsApp allows one call permission request per person a day, and two "
+                                         "a week. Try again later.")
+            try:
+                await client.request_call_permission(recipient, self.manager.spec.permission_request)
+            except KapsoError as error:
+                log.add("permission_request_failed", **error.fields())
+                raise OutboundError(502, REQUEST_ERRORS.get(error.code, str(error))) from None
+            except (httpx.TransportError, asyncio.TimeoutError, OSError):
+                log.add("permission_request_outcome_unknown")
+                raise OutboundError(502, "The request outcome is unknown. Check the phone before sending another.") from None
+            log.add("permission_request_sent")
+            return {**state, "sent": True}
+        finally:
+            await client.close()
 
     def receive_answer(self, call):
         call_id = call["id"]

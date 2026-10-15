@@ -73,6 +73,8 @@ In `agent/agent.toml`:
 - `[agent] name` is the agent name at the provider. `assistant_name` is what callers hear.
 - `[greetings]` are the first words of each call. `{at_business}` adds " at <business_name>".
   `voice-agent check` refuses a greeting without "AI".
+- `[outbound] permission_request` is the WhatsApp message that asks a person to allow calls
+  before an outbound call. Say who will call and why.
 - `[asr] keywords`: your business name, service names and other words callers say.
 - `[voice]`, `llm`, `[turn]`, `[limits]`: the ElevenLabs voice, model and call limits.
   `[grok]`: the Grok Voice model and voice.

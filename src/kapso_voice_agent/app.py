@@ -13,6 +13,7 @@ Operator (bearer OPERATOR_TOKEN; returns 404 when the token is unset):
   POST /operator/api/browser-call         {sdp} -> SDP answer; test the agent from a browser
   POST /operator/api/calls/{ref}/hangup   end a browser or outbound call
   POST /operator/api/outbound/permission  {recipient} (needs ENABLE_OUTBOUND=1)
+  POST /operator/api/outbound/permission-request  {recipient}: ask the person to allow calls
   POST /operator/api/outbound/call        {recipient} (needs ENABLE_OUTBOUND=1)
 """
 
@@ -276,6 +277,15 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     async def permission(body: Recipient):
         try:
             return await manager.outbound.permission(body.recipient)
+        except OutboundError as error:
+            raise HTTPException(error.status, str(error)) from None
+        except Exception as error:
+            raise HTTPException(502, f"Permission check failed: {type(error).__name__}") from None
+
+    @api.post("/outbound/permission-request", dependencies=[Depends(outbound_enabled)])
+    async def permission_request(body: Recipient):
+        try:
+            return await manager.outbound.request_permission(body.recipient)
         except OutboundError as error:
             raise HTTPException(error.status, str(error)) from None
         except Exception as error:

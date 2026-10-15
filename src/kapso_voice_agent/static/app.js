@@ -10,6 +10,7 @@ const UNREACHABLE = 'Unable to reach the server. The console tries again every 2
 let key = sessionStorage.getItem(STORAGE) || '';
 let peer, microphone, browserRef, outboundRef, allowedRecipient, state, poller, timer, callStartedAt;
 let attempt = 0;  // bumped by sign-out, so a call that is still starting knows to hang itself up
+let permissionWatch;  // after a permission request: polls until the person allows calls
 
 class Unauthorized extends Error {}
 
@@ -121,11 +122,12 @@ $('#sign-in-form').onsubmit = event => {
 async function signOut(message = '') {
   attempt += 1;
   if (browserRef || peer) { await hangUp(); }
+  stopPermissionWatch();
   if (outboundRef) {
     // Signing out ends the console's WhatsApp call too; its controls disappear with the key.
     await api(`/calls/${encodeURIComponent(outboundRef)}/hangup`, {}).catch(() => {});
     outboundRef = undefined;
-    $('#outbound-stop').disabled = true;
+    $('#outbound-stop').hidden = true;
     $('#outbound-status').textContent = '';
   }
   forgetKey();
@@ -368,10 +370,11 @@ function renderRecent() {
 }
 
 function renderOutbound() {
-  $('#outbound').hidden = !state.outbound_enabled;
+  $('#outbound-off').hidden = state.outbound_enabled;
+  $('#outbound-form').hidden = !state.outbound_enabled;
   if (outboundRef && !state.calls.some(call => call.ref === outboundRef)) {
     outboundRef = undefined;
-    $('#outbound-stop').disabled = true;
+    $('#outbound-stop').hidden = true;
     $('#outbound-status').textContent = 'Call ended.';
   }
 }
@@ -518,17 +521,71 @@ $('#mute').onclick = () => {
 
 // Outbound WhatsApp call ------------------------------------------------------------------
 
-$('#recipient').oninput = () => { allowedRecipient = undefined; $('#dial').disabled = true; };
+function stopPermissionWatch() {
+  clearTimeout(permissionWatch);
+  permissionWatch = undefined;
+}
+
+function showPermission(recipient, result) {
+  allowedRecipient = result.can_call ? recipient : undefined;
+  $('#dial').disabled = !result.can_call;
+  $('#outbound-status').textContent = result.can_call ? 'WhatsApp allows this call.'
+    : result.can_request ? 'This person has not allowed calls yet. Select Ask to allow calls.'
+      : 'This person has not allowed calls yet, and WhatsApp allows no more requests for now (one a day, two a week).';
+}
+
+// Polls every 4 seconds for 3 minutes, so the call button turns on when the person taps allow.
+function watchPermission(recipient, until = Date.now() + 180_000) {
+  permissionWatch = setTimeout(async () => {
+    try {
+      const result = await api('/outbound/permission', {recipient});
+      if ($('#recipient').value !== recipient || !permissionWatch) { return; }
+      if (result.can_call) {
+        permissionWatch = undefined;
+        showPermission(recipient, result);
+        return;
+      }
+    } catch { /* try again until the deadline */ }
+    if (!permissionWatch || $('#recipient').value !== recipient) { return; }
+    if (Date.now() < until) {
+      watchPermission(recipient, until);
+    } else {
+      permissionWatch = undefined;
+      $('#outbound-status').textContent = 'No answer to the request yet. After the person allows calls, select Check permission.';
+    }
+  }, 4000);
+}
+
+$('#recipient').oninput = () => {
+  stopPermissionWatch();
+  allowedRecipient = undefined;
+  $('#dial').disabled = true;
+};
 
 $('#permission').onclick = async () => {
+  const recipient = $('#recipient').value;
+  stopPermissionWatch();
   $('#outbound-status').textContent = 'Checking permission…';
   try {
-    const result = await api('/outbound/permission', {recipient: $('#recipient').value});
-    allowedRecipient = result.can_call ? $('#recipient').value : undefined;
-    $('#dial').disabled = !result.can_call;
-    $('#outbound-status').textContent = result.can_call ? 'WhatsApp allows this call.'
-      : `WhatsApp does not allow this call yet (permission: ${result.permission_status}). Ask the person to allow calls first.`;
+    showPermission(recipient, await api('/outbound/permission', {recipient}));
   } catch (error) { $('#outbound-status').textContent = error.message; }
+};
+
+$('#ask').onclick = async () => {
+  const recipient = $('#recipient').value;
+  stopPermissionWatch();
+  $('#ask').disabled = true;
+  $('#outbound-status').textContent = 'Sending the request…';
+  try {
+    const result = await api('/outbound/permission-request', {recipient});
+    if (!result.sent) {
+      showPermission(recipient, result);
+    } else {
+      $('#outbound-status').textContent = 'Request sent. When the person allows calls in WhatsApp, Call this person turns on.';
+      watchPermission(recipient);
+    }
+  } catch (error) { $('#outbound-status').textContent = error.message; }
+  $('#ask').disabled = false;
 };
 
 $('#dial').onclick = async () => {
@@ -536,6 +593,7 @@ $('#dial').onclick = async () => {
   const started = attempt, startKey = key;
   $('#dial').disabled = true;
   allowedRecipient = undefined;
+  stopPermissionWatch();
   $('#outbound-status').textContent = 'Requesting the call…';
   try {
     const result = await api('/outbound/call', {recipient: $('#recipient').value});
@@ -544,13 +602,13 @@ $('#dial').onclick = async () => {
       return;
     }
     outboundRef = result.state === 'ringing' ? result.ref : undefined;
-    $('#outbound-stop').disabled = !outboundRef;
+    $('#outbound-stop').hidden = !outboundRef;
     $('#outbound-status').textContent = outboundRef ? 'Ringing. Answer on the phone.' : 'The call ended.';
   } catch (error) { $('#outbound-status').textContent = error.message; }
 };
 
 $('#outbound-stop').onclick = async () => {
-  $('#outbound-stop').disabled = true;
+  $('#outbound-stop').hidden = true;
   try {
     await api(`/calls/${encodeURIComponent(outboundRef)}/hangup`, {});
     $('#outbound-status').textContent = 'Call ended.';

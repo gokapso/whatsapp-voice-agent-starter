@@ -62,7 +62,7 @@ response settings; fields the provider adds by itself are ignored.
 | Goal | Edit | Then run |
 | --- | --- | --- |
 | What the agent says and how | `agent/prompt.md` | `voice-agent check`, `pytest tests/test_agent_config.py tests/test_tools.py` |
-| Greeting, voice, model, limits, recording | `agent/agent.toml` | `voice-agent agent plan` |
+| Greeting, voice, model, limits, recording, call permission request text | `agent/agent.toml` | `voice-agent agent plan` |
 | Business facts and services (Cal.com event types) | `agent/business.json` | `voice-agent calendar check` |
 | Tool arguments and descriptions | `src/kapso_voice_agent/tools.py` (Pydantic models + `TOOLS`) | `voice-agent tools schema` |
 | Calendar requests, booking ownership | `src/kapso_voice_agent/calcom.py` | `pytest tests/test_calcom.py` |

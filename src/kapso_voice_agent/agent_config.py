@@ -47,13 +47,21 @@ class AgentSpec:
     def max_duration_seconds(self):
         return int(self.raw["limits"]["max_duration_seconds"])
 
+    def fill(self, text, **extra):
+        """{assistant}, {business} and {at_business} filled in, as in the greetings."""
+        business = self.business.name
+        return text.format(assistant=self.raw["agent"]["assistant_name"], business=business,
+                           at_business=f" at {business}" if business else "", **extra)
+
     def greeting(self, direction, recording):
         """direction: inbound|outbound. recording: whether any audio recording applies to this call."""
         greetings = self.raw["greetings"]
-        notice = " " + greetings["recording_notice"] if recording else ""
-        business = self.business.name
-        return greetings[direction].format(assistant=self.raw["agent"]["assistant_name"], business=business,
-                                           at_business=f" at {business}" if business else "", recording=notice)
+        return self.fill(greetings[direction], recording=" " + greetings["recording_notice"] if recording else "")
+
+    @property
+    def permission_request(self):
+        """Text of the WhatsApp message that asks a person to allow calls before an outbound call."""
+        return self.fill({**OUTBOUND_DEFAULTS, **self.raw.get("outbound", {})}["permission_request"])
 
     def business_label(self):
         """How the prompt names the business; a neutral phrase until business.json has a name."""
@@ -79,6 +87,10 @@ REQUIRED = {
 # greetings and the prompt's instructions; `voice-agent check` enforces it.
 FILLER_PHRASES = ("one second", "one moment", "hold on", "bear with me", "just a sec")
 GROK_DEFAULTS = {"model": "grok-voice-3.0", "voice": "eve"}
+OUTBOUND_DEFAULTS = {"permission_request": "{assistant}, the AI assistant{at_business}, would like to call you on "
+                                           "WhatsApp about your appointment."}
+# Meta's limit for the body of an interactive message.
+PERMISSION_REQUEST_LIMIT = 1024
 GROK_MODEL = re.compile(r"^grok-voice-[a-z0-9][a-z0-9.-]{0,30}$")
 VOICE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -98,6 +110,16 @@ def load_spec(path):
         raise ValueError("agent.toml grok.model must be an xAI voice model such as grok-voice-3.0")
     if not VOICE_ID.match(str(spec.grok["voice"])):
         raise ValueError("agent.toml grok.voice must be a voice ID such as eve")
+    unknown = set(raw.get("outbound", {})) - set(OUTBOUND_DEFAULTS)
+    if unknown:
+        raise ValueError("agent.toml [outbound] has unknown keys: " + ", ".join(sorted(unknown)))
+    try:
+        request = spec.permission_request
+    except (KeyError, IndexError, ValueError, AttributeError):
+        raise ValueError("agent.toml outbound.permission_request may use only {assistant}, {business} "
+                         "and {at_business}") from None
+    if not request.strip() or len(request) > PERMISSION_REQUEST_LIMIT:
+        raise ValueError(f"agent.toml outbound.permission_request must be 1 to {PERMISSION_REQUEST_LIMIT} characters")
     if not spec.prompt.strip():
         raise ValueError("The prompt file is empty")
     for direction in ("inbound", "outbound"):
