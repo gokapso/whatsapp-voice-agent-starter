@@ -91,9 +91,8 @@ audio reaches your server.
 
 ### 6. Let Riley call you (optional)
 
-Set `ENABLE_OUTBOUND=1` on the server (on Railway, in the Variables tab of the service). The
-console then shows **Call a WhatsApp number**. WhatsApp connects a call from a business only
-after the person allows calls from it:
+The console's **Call a WhatsApp number** panel calls people. WhatsApp connects a call from a
+business only after the person allows calls from it:
 
 1. From your phone, send the number any WhatsApp message. WhatsApp delivers the request in the
    next step only within 24 hours of the person's last message.

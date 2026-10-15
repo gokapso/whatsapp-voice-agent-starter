@@ -310,9 +310,6 @@ function renderSetup() {
       : `${webhook}Not proven yet. Call the number from a phone.`));
   }
 
-  rows.push(state.outbound_enabled
-    ? setupRow('Outbound calls', 'info', 'On', 'The form below rings real phones.')
-    : setupRow('Outbound calls', 'info', 'Off', ['Set ', {code: 'ENABLE_OUTBOUND=1'}, ' to call people from this console.']));
   $('#setup').replaceChildren(...rows);
 }
 
@@ -370,8 +367,9 @@ function renderRecent() {
 }
 
 function renderOutbound() {
-  $('#outbound-off').hidden = state.outbound_enabled;
-  $('#outbound-form').hidden = !state.outbound_enabled;
+  // Calling out needs the same Kapso and voice agent setup as answering.
+  $('#outbound-unready').hidden = state.calls_ready;
+  $('#outbound-form').hidden = !state.calls_ready && !outboundRef;
   if (outboundRef && !state.calls.some(call => call.ref === outboundRef)) {
     outboundRef = undefined;
     $('#outbound-stop').hidden = true;

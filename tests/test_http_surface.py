@@ -187,12 +187,18 @@ class TestOperatorSurface:
 
     @pytest.mark.parametrize("path,method", [("/operator/", "GET"), ("/operator/console.css", "GET"),
                                              ("/operator/api/state", "GET"),
-                                             ("/operator/api/browser-call", "POST")])
+                                             ("/operator/api/browser-call", "POST"),
+                                             ("/operator/api/outbound/permission", "POST"),
+                                             ("/operator/api/outbound/permission-request", "POST"),
+                                             ("/operator/api/outbound/call", "POST")])
     def test_operator_routes_do_not_exist_without_token(self, settings, spec, store, path, method):
         async def go():
-            async with asgi_client(make_app(replace(settings, operator_token=""), spec, store)) as client:
-                return (await client.request(method, path, json={"sdp": "x" * 20}, headers=AUTH)).status_code
-        assert run(go()) == 404
+            kapso = KapsoRecorder()
+            async with asgi_client(make_app(replace(settings, operator_token=""), spec, store, kapso)) as client:
+                status = (await client.request(method, path, json={"sdp": "x" * 20, "recipient": "15550100002"},
+                                               headers=AUTH)).status_code
+            return status, kapso.bodies
+        assert run(go()) == (404, [])
 
     @pytest.mark.parametrize("header", [None, "Bearer wrong", f"Basic {TOKEN}", f"Bearer {TOKEN}x"])
     def test_operator_api_requires_exact_bearer_token(self, settings, spec, store, header):
@@ -244,19 +250,9 @@ class TestOperatorSurface:
             "whatsapp_inbound", "relay", 1, False, False)
         assert state["voice"]["setup_step"] == "create_agent" and state["whatsapp_missing"] == ["KAPSO_API_KEY"]
 
-    def test_outbound_is_off_unless_enabled_and_never_dials(self, settings, spec, store):
-        async def go():
-            kapso = KapsoRecorder()
-            async with asgi_client(make_app(settings, spec, store, kapso)) as client:
-                permission = await client.post("/operator/api/outbound/permission", headers=AUTH, json={"recipient": "15550100002"})
-                ask = await client.post("/operator/api/outbound/permission-request", headers=AUTH, json={"recipient": "15550100002"})
-                call = await client.post("/operator/api/outbound/call", headers=AUTH, json={"recipient": "15550100002"})
-            return permission.status_code, ask.status_code, call.status_code, kapso.bodies
-        assert run(go()) == (403, 403, 403, [])
-
     def test_extra_fields_and_bad_refs_are_rejected(self, settings, spec, store):
         async def go():
-            app = make_app(replace(settings, enable_outbound=True), spec, store)
+            app = make_app(settings, spec, store)
             async with asgi_client(app) as client:
                 capture = await client.post("/operator/api/outbound/call", headers=AUTH, json={
                     "recipient": "15550100002", "recording": {"status": "ENABLED"}})

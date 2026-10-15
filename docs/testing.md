@@ -132,7 +132,7 @@ real phone and costs money. Get permission for each call.
    **Problem** under Recent calls. `call_failed_kapsoerror code=answered_elsewhere` means Kapso
    kept the call for the Inbox: set the number to Agent or integration in Kapso.
 
-Outbound calls (only with `ENABLE_OUTBOUND=1` and the person's consent): send the phone a
+Outbound calls (only with the person's consent): send the phone a
 WhatsApp message, then select **Ask to allow calls** in the console. Check that the phone gets the
 request (`permission_request_sent`), and that **Call this person** turns on after you allow
 calls. A second request on the same day is refused (`permission_request_limited`). Then check a

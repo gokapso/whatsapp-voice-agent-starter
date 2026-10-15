@@ -1,5 +1,4 @@
 import asyncio
-from dataclasses import replace
 import json
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
@@ -35,7 +34,7 @@ def test_no_permission_never_dials(settings, spec, store):
         async def handler(request):
             return httpx.Response(200, json=permission(False)) if request.method == "GET" else None
         kapso = KapsoRecorder(handler)
-        app = create_app(replace(settings, enable_outbound=True), spec, store, kapso_factory=kapso.factory())
+        app = create_app(settings, spec, store, kapso_factory=kapso.factory())
         async with asgi_client(app) as client:
             checked = await client.post("/operator/api/outbound/permission", headers=AUTH, json={"recipient": "15550100002"})
             dialed = await client.post("/operator/api/outbound/call", headers=AUTH, json={"recipient": "15550100002"})
@@ -57,7 +56,7 @@ def ask(settings, spec, store, recipient, current, sent=None):
                 return httpx.Response(200, json=current)
             return sent or httpx.Response(200, json={"messages": [{"id": "wamid.SYNTHETIC-1"}]})
         kapso = KapsoRecorder(handler)
-        app = create_app(replace(settings, enable_outbound=True), spec, store, kapso_factory=kapso.factory())
+        app = create_app(settings, spec, store, kapso_factory=kapso.factory())
         async with asgi_client(app) as client:
             response = await client.post("/operator/api/outbound/permission-request", headers=AUTH,
                                          json={"recipient": recipient})
@@ -106,7 +105,7 @@ def test_ambiguous_connect_is_not_retried_and_releases_media(settings, spec, sto
                 return httpx.Response(200, json=permission())
             raise httpx.ReadTimeout("synthetic timeout", request=request)
         kapso = KapsoRecorder(handler)
-        app = create_app(replace(settings, enable_outbound=True), spec, store, kapso_factory=kapso.factory())
+        app = create_app(settings, spec, store, kapso_factory=kapso.factory())
         manager, connections = app.state.manager, []
         original = manager.connection_factory
 
@@ -126,7 +125,7 @@ def test_ambiguous_connect_is_not_retried_and_releases_media(settings, spec, sto
 @pytest.mark.parametrize("events", [["connect", "terminate"], ["terminate", "connect"]])
 def test_terminate_batched_before_connect_response_wins(settings, spec, store, events):
     async def go():
-        app = create_app(replace(settings, enable_outbound=True), spec, store)
+        app = create_app(settings, spec, store)
         manager = app.state.manager
 
         async def handler(request):
@@ -154,7 +153,7 @@ def test_outbound_call_waits_for_accepted_then_runs_one_agent(settings, spec, st
         listen(peer, heard, consumers)
         async with Harness(echo_until(heard, done, minimum=15, first={
                 "type": "client_tool_call", "client_tool_call": tool_call("my_appointments")})) as agent:
-            app = create_app(replace(settings, enable_outbound=True), spec, store, session_factory=agent.factory())
+            app = create_app(settings, spec, store, session_factory=agent.factory())
             manager = app.state.manager
 
             async def handler(request):

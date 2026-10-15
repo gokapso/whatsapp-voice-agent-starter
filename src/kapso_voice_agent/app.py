@@ -12,9 +12,9 @@ Operator (bearer OPERATOR_TOKEN; returns 404 when the token is unset):
   GET  /operator/api/state                readiness, voice provider, recording state, active calls, event log, artifact notices
   POST /operator/api/browser-call         {sdp} -> SDP answer; test the agent from a browser
   POST /operator/api/calls/{ref}/hangup   end a browser or outbound call
-  POST /operator/api/outbound/permission  {recipient} (needs ENABLE_OUTBOUND=1)
+  POST /operator/api/outbound/permission  {recipient}: may this server call the person?
   POST /operator/api/outbound/permission-request  {recipient}: ask the person to allow calls
-  POST /operator/api/outbound/call        {recipient} (needs ENABLE_OUTBOUND=1)
+  POST /operator/api/outbound/call        {recipient}: call a person who allowed calls
 """
 
 import asyncio
@@ -239,7 +239,7 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
                 "agent_missing": settings.agent_missing(),  # setting names only, never values
                 "voice": voice_status(), "calendar": settings.calendar or None,
                 "whatsapp_missing": whatsapp_missing, "kapso_webhook": kapso_webhook["state"],
-                "outbound_enabled": settings.enable_outbound, "local_capture": settings.local_capture,
+                "local_capture": settings.local_capture,
                 "recording": manager.recording.status(),
                 "max_concurrent_calls": settings.max_concurrent_calls, "busy": manager.busy(),
                 "calls": calls, "recent_calls": log.recent_calls({call["ref"] for call in calls}),
@@ -269,11 +269,7 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             raise HTTPException(404, "No active call with that reference")
         return {"ended": True}
 
-    def outbound_enabled():
-        if not settings.enable_outbound:
-            raise HTTPException(403, "Outbound calling is off (ENABLE_OUTBOUND=0)")
-
-    @api.post("/outbound/permission", dependencies=[Depends(outbound_enabled)])
+    @api.post("/outbound/permission")
     async def permission(body: Recipient):
         try:
             return await manager.outbound.permission(body.recipient)
@@ -282,7 +278,7 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
         except Exception as error:
             raise HTTPException(502, f"Permission check failed: {type(error).__name__}") from None
 
-    @api.post("/outbound/permission-request", dependencies=[Depends(outbound_enabled)])
+    @api.post("/outbound/permission-request")
     async def permission_request(body: Recipient):
         try:
             return await manager.outbound.request_permission(body.recipient)
@@ -291,7 +287,7 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
         except Exception as error:
             raise HTTPException(502, f"Permission check failed: {type(error).__name__}") from None
 
-    @api.post("/outbound/call", dependencies=[Depends(outbound_enabled)])
+    @api.post("/outbound/call")
     async def outbound_call(body: Recipient):
         try:
             return await manager.outbound.start(body.recipient)

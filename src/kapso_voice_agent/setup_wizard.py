@@ -45,7 +45,7 @@ CLIPBOARDS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["c
 # What a hosted server reads. DATA_DIR comes from the image; DEV_AGENT_WS_URL is loopback-only.
 SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
                "OPERATOR_TOKEN", "CALLER_KEY_SECRET", "KAPSO_API_KEY", "WHATSAPP_PHONE_NUMBER_ID",
-               "WHATSAPP_WEBHOOK_SECRET", "META_GRAPH_VERSION", "ICE_SERVERS_JSON", "ENABLE_OUTBOUND",
+               "WHATSAPP_WEBHOOK_SECRET", "META_GRAPH_VERSION", "ICE_SERVERS_JSON",
                "MAX_SESSION_SECONDS", "MAX_CONCURRENT_CALLS", "LOCAL_CAPTURE", "CAPTURE_RETENTION_DAYS",
                "CAPTURE_MAX_COUNT")
 # Railway receives no inbound UDP. With a STUN server the server learns its public address, and
@@ -240,7 +240,7 @@ def server_variables(path, target):
     notes = []
     if target == "pipecat-cloud":
         # No webhook and no console in a Cloud session; Kapso's API vouches for each call (cloud.py).
-        keys = tuple(k for k in SERVER_KEYS if k not in ("OPERATOR_TOKEN", "WHATSAPP_WEBHOOK_SECRET", "ENABLE_OUTBOUND"))
+        keys = tuple(k for k in SERVER_KEYS if k not in ("OPERATOR_TOKEN", "WHATSAPP_WEBHOOK_SECRET"))
         if not values.get("CALLER_KEY_SECRET"):
             raise SetupError("Set CALLER_KEY_SECRET in the env file first. Use the same value everywhere this number's "
                              "calls are answered, or callers lose their bookings")

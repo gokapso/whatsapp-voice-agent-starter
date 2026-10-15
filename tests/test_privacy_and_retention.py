@@ -151,7 +151,7 @@ class TestNoSessionWhileRecordingIsUnknown:
     def test_browser_and_outbound_calls_get_503_and_never_dial(self, settings, spec, store):
         async def go():
             kapso = KapsoRecorder()
-            app = create_app(replace(settings, enable_outbound=True), spec, store, session_factory=NeverSession,
+            app = create_app(settings, spec, store, session_factory=NeverSession,
                              kapso_factory=kapso.factory(), recording_reader=reader(RuntimeError("synthetic outage")))
             async with asgi_client(app) as client:
                 browser = await client.post("/operator/api/browser-call", headers=AUTH, json={"sdp": "v=0 synthetic offer"})

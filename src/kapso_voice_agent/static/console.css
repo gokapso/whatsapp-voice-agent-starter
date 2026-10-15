@@ -145,7 +145,7 @@ input[aria-invalid="true"] { border-color: var(--todo); }
 
 /* Outbound */
 #outbound .hint { margin: 4px 0 16px; }
-#outbound #outbound-off { margin-bottom: 0; }
+#outbound #outbound-unready { margin-bottom: 0; }
 #outbound #permission-hint { margin: 8px 0 0; }
 
 /* Event log */
