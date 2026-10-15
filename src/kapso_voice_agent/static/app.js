@@ -166,15 +166,18 @@ const WEBHOOK_PROBLEMS = {
   missing_settings: ['Unable to register the webhook: this server has no public domain. Add one in Railway, then restart this server.'],
 };
 
-// The newest WhatsApp call was refused by Kapso: the number's Inbox fallback (or a dashboard
-// voice agent) took it, so this server could not answer.
-function lastCallNotAnswerable() {
+// Kapso kept the newest WhatsApp call for another handler (409 answered_elsewhere or
+// not_answerable), so this server could not answer it.
+const HANDLED_ELSEWHERE = ['answered_elsewhere', 'not_answerable'];
+
+function lastCallHandledElsewhere() {
   const call = state.recent_calls.find(c => c.kind === 'whatsapp_inbound');
-  return Boolean(call) && state.events.some(e => e.ref === call.ref && e.code === 'not_answerable');
+  return Boolean(call) && state.events.some(e => e.ref === call.ref && HANDLED_ELSEWHERE.includes(e.code));
 }
 
-const NOT_ANSWERABLE = ['Kapso gave the last call to the Inbox, so this server could not answer it. Turn off Inbox '
-  + 'fallback for this number in Kapso, and remove any dashboard voice agent from it. Then call again.'];
+const HANDLED_ELSEWHERE_HELP = ['Kapso did not let this server answer the last call. In Kapso, set Incoming call '
+  + 'answering for this number to Agent or integration (no Inbox fallback), and remove any dashboard voice agent '
+  + 'from it. Then call again.'];
 
 function connectedWhatsAppCall() {
   return state.recent_calls.find(call => call.kind !== 'browser' && call.connected_at);
@@ -209,8 +212,8 @@ function nextStep() {
   if (WEBHOOK_PROBLEMS[state.kapso_webhook]) {
     return {blocking: false, parts: WEBHOOK_PROBLEMS[state.kapso_webhook]};
   }
-  if (lastCallNotAnswerable()) {
-    return {blocking: false, parts: NOT_ANSWERABLE};
+  if (lastCallHandledElsewhere()) {
+    return {blocking: false, parts: HANDLED_ELSEWHERE_HELP};
   }
   const call = connectedWhatsAppCall();
   if (!call) {
@@ -295,8 +298,8 @@ function renderSetup() {
     rows.push(setupRow('WhatsApp', 'info', 'Not connected', ['Needs ', ...codeList(state.whatsapp_missing), '.']));
   } else if (WEBHOOK_PROBLEMS[state.kapso_webhook]) {
     rows.push(setupRow('WhatsApp', 'todo', 'Webhook not connected', WEBHOOK_PROBLEMS[state.kapso_webhook]));
-  } else if (lastCallNotAnswerable()) {
-    rows.push(setupRow('WhatsApp', 'todo', 'Calls go to the Kapso Inbox', NOT_ANSWERABLE));
+  } else if (lastCallHandledElsewhere()) {
+    rows.push(setupRow('WhatsApp', 'todo', 'Kapso kept the last call', HANDLED_ELSEWHERE_HELP));
   } else {
     const call = connectedWhatsAppCall();
     const webhook = ['registered', 'present'].includes(state.kapso_webhook) ? 'The webhook of the number points to this server. ' : '';
@@ -378,7 +381,7 @@ function render() {
   renderSetup();
   renderRecent();
   renderOutbound();
-  const details = e => ['media', 'http_status', 'code'].filter(key => e[key]).map(key => ` ${key}=${e[key]}`).join('');
+  const details = e => ['media', 'http_status', 'code', 'request_id'].filter(key => e[key]).map(key => ` ${key}=${e[key]}`).join('');
   $('#events').textContent = state.events.map(e => `${e.at.slice(11, 23)} ${e.event}${e.ref ? ' ' + e.ref : ''}${details(e)}`).join('\n');
 }
 

@@ -6,19 +6,29 @@ from urllib.parse import quote, urlencode
 import httpx
 
 KAPSO_API = "https://api.kapso.ai"
-SAFE_CODE = re.compile(r"[^a-z0-9_]+")
+SAFE_TOKEN = re.compile(r"[^a-z0-9_-]+")
+# Kapso keeps the call for another handler (the Inbox, a dashboard voice agent): this server must
+# not answer it, and a reject or terminate from here is refused the same way.
+HANDLED_ELSEWHERE = ("answered_elsewhere", "not_answerable")
+
+
+def safe_token(value, limit):
+    token = SAFE_TOKEN.sub("_", str(value).lower()).strip("_")[:limit] if isinstance(value, (str, int)) else ""
+    return token or None
 
 
 class KapsoError(Exception):
-    """A refused or unreadable Kapso request. `http_status` and Kapso's short error `code` (for
-    example 409 `not_answerable`) are safe to log; the message can echo request details."""
+    """A refused or unreadable Kapso request. The HTTP status, the error `code` (Kapso's, e.g.
+    `answered_elsewhere`, or Meta's numeric one) and Kapso's `x-request-id` are safe to log; the
+    message can echo request details and is never logged."""
 
-    def __init__(self, message, http_status=None, code=None):
+    def __init__(self, message, http_status=None, code=None, request_id=None):
         super().__init__(message)
-        self.http_status, self.code = http_status, code
+        self.http_status, self.code, self.request_id = http_status, code, request_id
 
     def fields(self):
-        return {name: value for name, value in (("http_status", self.http_status), ("code", self.code)) if value}
+        values = (("http_status", self.http_status), ("code", self.code), ("request_id", self.request_id))
+        return {name: value for name, value in values if value}
 
 
 class KapsoClient:
@@ -29,20 +39,21 @@ class KapsoClient:
 
     async def request(self, method, path, body=None):
         response = await self.client.request(method, self.base_url + path, headers={"X-API-Key": self.key}, json=body)
+        request_id = safe_token(response.headers.get("x-request-id"), 64)
         try:
             data = response.json()
         except ValueError:
-            raise KapsoError(f"Kapso returned HTTP {response.status_code} without JSON", response.status_code) from None
+            raise KapsoError(f"Kapso returned HTTP {response.status_code} without JSON", response.status_code,
+                             request_id=request_id) from None
         if response.is_error:
             error = data.get("error", data.get("errors", "request failed")) if isinstance(data, dict) else "request failed"
             message = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            # Kapso: {"error": "...", "code": "answered_elsewhere"}. Meta, passed through: {"error": {"code": 131009}}.
             code = data.get("code") if isinstance(data, dict) else None
-            if isinstance(code, str):
-                code = SAFE_CODE.sub("_", code.lower()).strip("_")[:40] or None
-            else:
-                code = None
+            if code is None and isinstance(error, dict):
+                code = error.get("code")
             raise KapsoError(f"HTTP {response.status_code}: " + message.replace(self.key, "[redacted]")[:300],
-                             response.status_code, code)
+                             response.status_code, safe_token(code, 40), request_id)
         if not isinstance(data, dict):
             raise KapsoError("Kapso returned an unexpected JSON shape")
         return data
