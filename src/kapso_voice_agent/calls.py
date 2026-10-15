@@ -17,7 +17,7 @@ import secrets
 
 from .bridge import ElevenSession, make_connection, meta_sdp
 from .events import call_ref
-from .kapso import KapsoClient
+from .kapso import HANDLED_ELSEWHERE, KapsoClient, KapsoError
 from .outbound import OutboundCalls
 from .recording import RecordingCheck
 
@@ -35,6 +35,16 @@ class NotReady(Exception):
 
 def valid_id(value):
     return isinstance(value, str) and 1 <= len(value) <= MAX_ID_LENGTH
+
+
+def error_fields(error):
+    """Kapso's HTTP status, error code and request ID for the event log, e.g. 409
+    answered_elsewhere when Kapso keeps the call for the Inbox or a dashboard voice agent."""
+    return error.fields() if isinstance(error, KapsoError) else {}
+
+
+def handled_elsewhere(error):
+    return isinstance(error, KapsoError) and error.code in HANDLED_ELSEWHERE
 
 
 class CallManager:
@@ -176,7 +186,7 @@ class CallManager:
             await client.action(call_id, "reject")
             self.log.add("reject_ok", call_ref(call_id))
         except Exception as error:
-            self.log.add("reject_failed_" + type(error).__name__, call_ref(call_id))
+            self.log.add("reject_failed_" + type(error).__name__, call_ref(call_id), **error_fields(error))
         finally:
             await client.close()
 
@@ -184,7 +194,7 @@ class CallManager:
         call_id, ref = call["id"], call_ref(call["id"])
         client = self.kapso_factory()
         connection = session = None
-        accepted = False
+        accepted = elsewhere = False
         try:
             async with asyncio.timeout(ANSWER_TIMEOUT_SECONDS):
                 # Unknown recording state raises here, before pre_accept, so the call is rejected.
@@ -212,20 +222,23 @@ class CallManager:
         except TimeoutError:
             self.log.add("call_timed_out" if accepted else "answer_timed_out", ref)
         except Exception as error:
-            self.log.add("call_failed_" + type(error).__name__, ref)
+            self.log.add("call_failed_" + type(error).__name__, ref, **error_fields(error))
+            elsewhere = handled_elsewhere(error)  # Kapso would refuse a reject or terminate too
         finally:
             try:
                 if session:
                     await session.close()
                 elif connection:
                     await connection.disconnect()
-                if self.seen.get(call_id) != "terminated":
+                if self.seen.get(call_id) != "terminated" and not elsewhere:
                     action = "terminate" if accepted else "reject"
                     try:
                         await client.action(call_id, action)
                         self.log.add(action + "_ok", ref)
                     except Exception as error:
-                        self.log.add(action + "_failed_" + type(error).__name__, ref)
+                        self.log.add(action + "_failed_" + type(error).__name__, ref, **error_fields(error))
+                    self.remember(call_id, "closed")
+                elif elsewhere:
                     self.remember(call_id, "closed")
             finally:
                 await client.close()

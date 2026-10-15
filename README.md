@@ -29,7 +29,8 @@ the other options and why a provider cannot answer a Kapso number directly today
 
 You need:
 
-- A Kapso project and a dedicated WhatsApp number with Calling enabled.
+- A Kapso project and a dedicated WhatsApp number with Calling enabled, and its incoming call
+  answering set to **Agent or integration** (no Inbox fallback).
 - An API key for one voice provider: [ElevenLabs](https://elevenlabs.io/app/settings/api-keys)
   (with Agents access) or [xAI](https://console.x.ai) for Grok Voice.
 - Python 3.12, [uv](https://docs.astral.sh/uv/) and a [Railway](https://railway.com) account.

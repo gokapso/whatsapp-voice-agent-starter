@@ -13,10 +13,11 @@ import numpy as np
 import pytest
 from websockets.asyncio.server import serve
 
-from conftest import TOKEN, KapsoRecorder, ToneTrack, asgi_client, fixture, listen, post_webhook, tool_call, wait_for_event
+from conftest import KAPSO_KEY, PHONE, TOKEN, KapsoRecorder, ToneTrack, asgi_client, fixture, listen, post_webhook, tool_call, wait_for_event
 from kapso_voice_agent import bridge
 from kapso_voice_agent.app import create_app
 from kapso_voice_agent.bridge import ElevenSession
+from kapso_voice_agent.kapso import KapsoClient, KapsoError
 
 CALL_ID = "wacid.SYNTHETIC-INBOUND-1"
 
@@ -188,6 +189,46 @@ def test_failure_before_accept_rejects_the_call_and_starts_no_agent(settings, sp
     kapso, agent = asyncio.run(go())
     expected = ["pre_accept", "reject"] if failing == "pre_accept" else ["pre_accept", "accept", "reject"]
     assert kapso.actions == expected and agent.sessions == []
+
+
+def test_call_kapso_keeps_elsewhere_is_logged_and_not_rejected(settings, spec, store):
+    # In hybrid mode (Inbox fallback) Kapso can keep the call and refuse this server's pre_accept
+    # with 409 answered_elsewhere. The operator must see why, and a reject would be refused too.
+    async def go():
+        async def kept(request):
+            return httpx.Response(409, json={"error": "Answered elsewhere", "code": "answered_elsewhere"},
+                                  headers={"x-request-id": "req-SYNTHETIC-1"})
+        kapso = KapsoRecorder(kept)
+        async with Harness(echo_until(asyncio.Event(), {})) as agent:
+            app = create_app(settings, spec, store, session_factory=agent.factory(), kapso_factory=kapso.factory())
+            peer = RTCPeerConnection()
+            peer.addTrack(ToneTrack())
+            try:
+                await asyncio.wait_for(await inbound_call(app, peer), timeout=10)
+            finally:
+                await app.state.manager.shutdown()
+                await peer.close()
+        return kapso, agent, list(app.state.log.events)
+    kapso, agent, events = asyncio.run(go())
+    failed = next(e for e in events if e["event"] == "call_failed_kapsoerror")
+    assert kapso.actions == ["pre_accept"] and agent.sessions == []
+    assert (failed["http_status"], failed["code"], failed["request_id"]) == (409, "answered_elsewhere",
+                                                                             "req-synthetic-1")
+
+
+def test_meta_errors_passed_through_kapso_keep_their_numeric_code():
+    async def go():
+        async def meta(request):
+            return httpx.Response(400, json={"error": {"message": "Parameter value is not valid", "code": 131009,
+                                                       "type": "OAuthException"}})
+        client = KapsoClient(KAPSO_KEY, PHONE, client=httpx.AsyncClient(transport=httpx.MockTransport(meta)))
+        try:
+            await client.action("wacid.SYNTHETIC-INBOUND-1", "reject")
+        except KapsoError as error:
+            return error
+        finally:
+            await client.close()
+    assert asyncio.run(go()).fields() == {"http_status": 400, "code": "131009"}
 
 
 def test_agent_start_failure_after_accept_terminates(settings, spec, store):

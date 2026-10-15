@@ -213,6 +213,11 @@ No SQLite transaction stays open during a Cal.com request. Each local write is o
 server in `ICE_SERVERS_JSON`) or `unknown`. `provider_problem_<code>` is logged with the same codes
 as `voice.problem`. `rtc_connect_timed_out`: the call's audio did not connect within 30 seconds;
 the session ends and frees its call slot (an inbound call then gets `terminate`).
+A failed Kapso call action (`call_failed_kapsoerror`, `reject_failed_kapsoerror`,
+`terminate_failed_kapsoerror`) carries `http_status`, the error `code` (Kapso's, or Meta's numeric
+code passed through) and Kapso's `request_id`. `409` `answered_elsewhere` or `not_answerable`
+means Kapso keeps the call for another handler (the Inbox in hybrid mode, or a dashboard voice
+agent); the server then sends no reject, which Kapso would refuse too.
 `kapso_webhook_<state>` (one per startup with `KAPSO_REGISTER_WEBHOOK=1`): the same states as
 `kapso_webhook` in `/operator/api/state`. `other` means another URL already receives the number's
 Meta events; it is left alone.

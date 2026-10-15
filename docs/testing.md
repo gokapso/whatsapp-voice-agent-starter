@@ -122,13 +122,15 @@ repository. They use LLM credits.
 Do this after level 2 passes, on a hosted server ([`deploy.md`](deploy.md)). Every call rings a
 real phone and costs money. Get permission for each call.
 
-1. Register the Kapso webhook. Make sure no dashboard voice agent answers the number.
+1. Register the Kapso webhook. Make sure no dashboard voice agent answers the number and that
+   its incoming call answering is Agent or integration (no Inbox fallback).
 2. Call the number from WhatsApp. Repeat browser checks 1, 2, 4, 6, 7, 10, 14 and 15.
 3. Hang up yourself once, and let Riley end one call.
 4. For each call, check the event log: `pre_accept_ok` and `accept_ok`, then `rtc_connected`
    with `media=direct`, `agent_socket_connected`, `first_audio_in` and `first_audio_out`. At the
    end, `terminate_ok` when Riley hung up, or `call_terminated` when you did. Neither call shows
-   **Problem** under Recent calls.
+   **Problem** under Recent calls. `call_failed_kapsoerror code=answered_elsewhere` means Kapso
+   kept the call for the Inbox: set the number to Agent or integration in Kapso.
 
 Outbound calls (only with `ENABLE_OUTBOUND=1` and the person's permission): check the permission,
 a declined call, an unanswered call and an answered call.
