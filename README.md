@@ -6,6 +6,16 @@ Answer WhatsApp calls with your own AI front desk. Riley, the sample agent, says
 and answers questions about your business. After a clear yes, it books, moves or cancels
 appointments in your [Cal.com](https://cal.com) calendar.
 
+## Deploy in one click
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/whatsapp-voice-agent-kapso)
+
+You need a Kapso number with Calling enabled and its incoming call answering set to **Agent or
+integration**, and an [xAI](https://console.x.ai) API key for Grok Voice. Fill in three values and
+deploy. The server registers itself as your number's webhook in Kapso, so you can call the number
+right away. Sign in to `https://<your-domain>/operator/` with the `OPERATOR_TOKEN` variable to see
+your calls. To change the agent or use ElevenLabs, set it up from the repository (below).
+
 ## How the parts fit
 
 - **Kapso** owns your WhatsApp number, your messages and the call API.
@@ -25,7 +35,7 @@ You run one server for one number, with either provider. You do not need a separ
 service for each provider. [`docs/deploy.md`](docs/deploy.md#other-ways-to-run-calls) explains
 the other options and why a provider cannot answer a Kapso number directly today.
 
-## Get started
+## Get started from the repository
 
 You need:
 

@@ -72,7 +72,7 @@ response settings; fields the provider adds by itself are ignored.
 | Call handling rules | `src/kapso_voice_agent/calls.py`, `outbound.py` | `pytest tests/test_http_surface.py tests/test_call_flow.py tests/test_outbound.py` |
 | Grok Voice protocol, model, voice | `src/kapso_voice_agent/grok_bridge.py`, `agent/agent.toml` `[grok]` | `pytest tests/test_grok_bridge.py` |
 | Pipecat Cloud entry, Kapso launch check | `src/kapso_voice_agent/cloud.py`, `examples/pipecat-cloud/` | `pytest tests/test_cloud_launch.py` |
-| Hosting, guided setup | `setup_wizard.py`, `.railway/railway.ts`, `examples/vps/` | `pytest tests/test_setup_wizard.py`, then a real WhatsApp call (`docs/deploy.md`) |
+| Hosting, guided setup, Railway template | `setup_wizard.py`, `.railway/railway.ts`, `.railway/template.md`, `examples/vps/` | `pytest tests/test_setup_wizard.py`, then a real WhatsApp call (`docs/deploy.md`) |
 | Operator console | `src/kapso_voice_agent/static/`; state from `app.py` `/operator/api/state`, recent calls from `events.py` | `pytest tests/test_http_surface.py`; check it in a browser, light and dark, at 320 px |
 | Recording notice decision | `src/kapso_voice_agent/recording.py` | `pytest tests/test_privacy_and_retention.py` |
 | Private files, retention | `src/kapso_voice_agent/private.py` | `pytest tests/test_privacy_and_retention.py` |
