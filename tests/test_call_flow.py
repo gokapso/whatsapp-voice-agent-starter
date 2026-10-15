@@ -190,6 +190,30 @@ def test_failure_before_accept_rejects_the_call_and_starts_no_agent(settings, sp
     assert kapso.actions == expected and agent.sessions == []
 
 
+def test_kapso_refusal_is_logged_with_its_status_and_code(settings, spec, store):
+    # With the number's Inbox fallback on, Kapso refuses this server's call actions. The operator
+    # must see why (409 not_answerable), not only "kapsoerror".
+    async def go():
+        async def not_answerable(request):
+            return httpx.Response(409, json={"error": "Not answerable", "code": "not_answerable"})
+        kapso = KapsoRecorder(not_answerable)
+        async with Harness(echo_until(asyncio.Event(), {})) as agent:
+            app = create_app(settings, spec, store, session_factory=agent.factory(), kapso_factory=kapso.factory())
+            peer = RTCPeerConnection()
+            peer.addTrack(ToneTrack())
+            try:
+                await asyncio.wait_for(await inbound_call(app, peer), timeout=10)
+            finally:
+                await app.state.manager.shutdown()
+                await peer.close()
+        return kapso, agent, list(app.state.log.events)
+    kapso, agent, events = asyncio.run(go())
+    failures = {e["event"]: e for e in events if e["event"].endswith("_failed_kapsoerror")}
+    assert kapso.actions == ["pre_accept", "reject"] and agent.sessions == []
+    for name in ("call_failed_kapsoerror", "reject_failed_kapsoerror"):
+        assert (failures[name]["http_status"], failures[name]["code"]) == (409, "not_answerable")
+
+
 def test_agent_start_failure_after_accept_terminates(settings, spec, store):
     async def go():
         kapso = KapsoRecorder()

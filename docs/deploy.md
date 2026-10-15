@@ -97,8 +97,10 @@ with a public IP.
 
 1. In the Kapso dashboard, enable Calling on a dedicated number (**Phone numbers > Enable
    calls**). Kapso's messaging sandbox is not a Calling number.
-2. Make sure nothing else answers the calls: no dashboard voice agent on the number, and no
-   answering from the Inbox.
+2. Make sure nothing else answers the calls: no dashboard voice agent on the number, and
+   **Inbox fallback off** for the number. While the Inbox can take the call, Kapso refuses this
+   server's `pre_accept` with `409 not_answerable`, and the call rings in the Inbox instead. The
+   console then says so.
 3. Point the number's Meta webhook at the server. On Railway the server does it at startup
    (`KAPSO_REGISTER_WEBHOOK=1`); the console's WhatsApp row shows the result. On other hosts:
 

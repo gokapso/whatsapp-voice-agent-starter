@@ -1,14 +1,24 @@
 """Kapso's Meta proxy for call actions, with your project API key. No Meta token is used here."""
 
+import re
 from urllib.parse import quote, urlencode
 
 import httpx
 
 KAPSO_API = "https://api.kapso.ai"
+SAFE_CODE = re.compile(r"[^a-z0-9_]+")
 
 
 class KapsoError(Exception):
-    pass
+    """A refused or unreadable Kapso request. `http_status` and Kapso's short error `code` (for
+    example 409 `not_answerable`) are safe to log; the message can echo request details."""
+
+    def __init__(self, message, http_status=None, code=None):
+        super().__init__(message)
+        self.http_status, self.code = http_status, code
+
+    def fields(self):
+        return {name: value for name, value in (("http_status", self.http_status), ("code", self.code)) if value}
 
 
 class KapsoClient:
@@ -22,11 +32,17 @@ class KapsoClient:
         try:
             data = response.json()
         except ValueError:
-            raise KapsoError(f"Kapso returned HTTP {response.status_code} without JSON") from None
+            raise KapsoError(f"Kapso returned HTTP {response.status_code} without JSON", response.status_code) from None
         if response.is_error:
             error = data.get("error", data.get("errors", "request failed")) if isinstance(data, dict) else "request failed"
             message = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-            raise KapsoError(f"HTTP {response.status_code}: " + message.replace(self.key, "[redacted]")[:300])
+            code = data.get("code") if isinstance(data, dict) else None
+            if isinstance(code, str):
+                code = SAFE_CODE.sub("_", code.lower()).strip("_")[:40] or None
+            else:
+                code = None
+            raise KapsoError(f"HTTP {response.status_code}: " + message.replace(self.key, "[redacted]")[:300],
+                             response.status_code, code)
         if not isinstance(data, dict):
             raise KapsoError("Kapso returned an unexpected JSON shape")
         return data

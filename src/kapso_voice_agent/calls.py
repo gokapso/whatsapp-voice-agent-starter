@@ -17,7 +17,7 @@ import secrets
 
 from .bridge import ElevenSession, make_connection, meta_sdp
 from .events import call_ref
-from .kapso import KapsoClient
+from .kapso import KapsoClient, KapsoError
 from .outbound import OutboundCalls
 from .recording import RecordingCheck
 
@@ -35,6 +35,12 @@ class NotReady(Exception):
 
 def valid_id(value):
     return isinstance(value, str) and 1 <= len(value) <= MAX_ID_LENGTH
+
+
+def error_fields(error):
+    """Kapso's HTTP status and error code for the event log, e.g. 409 not_answerable when the
+    number's Inbox fallback or a dashboard voice agent has the call."""
+    return error.fields() if isinstance(error, KapsoError) else {}
 
 
 class CallManager:
@@ -176,7 +182,7 @@ class CallManager:
             await client.action(call_id, "reject")
             self.log.add("reject_ok", call_ref(call_id))
         except Exception as error:
-            self.log.add("reject_failed_" + type(error).__name__, call_ref(call_id))
+            self.log.add("reject_failed_" + type(error).__name__, call_ref(call_id), **error_fields(error))
         finally:
             await client.close()
 
@@ -212,7 +218,7 @@ class CallManager:
         except TimeoutError:
             self.log.add("call_timed_out" if accepted else "answer_timed_out", ref)
         except Exception as error:
-            self.log.add("call_failed_" + type(error).__name__, ref)
+            self.log.add("call_failed_" + type(error).__name__, ref, **error_fields(error))
         finally:
             try:
                 if session:
@@ -225,7 +231,7 @@ class CallManager:
                         await client.action(call_id, action)
                         self.log.add(action + "_ok", ref)
                     except Exception as error:
-                        self.log.add(action + "_failed_" + type(error).__name__, ref)
+                        self.log.add(action + "_failed_" + type(error).__name__, ref, **error_fields(error))
                     self.remember(call_id, "closed")
             finally:
                 await client.close()
