@@ -44,8 +44,8 @@ cd examples/pipecat-cloud && pipecat cloud deploy --max-session-duration 400   #
 ```
 
 The secret set needs `KAPSO_API_KEY`, `WHATSAPP_PHONE_NUMBER_ID`, `CALLER_KEY_SECRET` (the same
-value everywhere this number is answered), the provider keys and `CAL_API_KEY`. Add
-`TURN_PROVIDER=cloudflare` and its keys if audio does not connect. `export-env` checks these.
+value everywhere this number is answered), the provider keys and `CAL_API_KEY`. `export-env`
+checks these.
 
 Then, in the Kapso dashboard, create a voice agent with the Pipecat provider. Enter your Pipecat
 public API key and the agent name `kapso-voice-agent`, and assign the agent to the number. First remove
@@ -63,4 +63,4 @@ call IDs or audio.
 | `finished` with `accept_ok`, `rtc_connected` | The call worked |
 | `unverified` | Kapso did not vouch for the call. Check `KAPSO_API_KEY` and `WHATSAPP_PHONE_NUMBER_ID` |
 | `not_configured` | A key is missing. `voice-agent check` on your `.env` lists it |
-| `accept_ok` but no `rtc_connected` | No audio path. Add `TURN_PROVIDER=cloudflare` and its keys |
+| `accept_ok` but no `rtc_connected` | No audio path between Meta and the session |

@@ -34,6 +34,7 @@ from urllib.parse import quote
 from pipecat.frames.frames import CancelFrame, EndFrame, EndWorkerFrame, InputAudioRawFrame, OutputAudioRawFrame, StartFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosedOK
 
 from .bridge import CHUNK_BYTES, SAMPLE_RATE, provider_problem
 from .tools import TOOLS, ToolRunner, provider_tool_definitions
@@ -171,7 +172,8 @@ class GrokAgentBridge(FrameProcessor):
                 try:
                     await self.send({"type": "input_audio_buffer.append", "audio": base64.b64encode(chunk).decode()})
                 except Exception as error:
-                    self.log.add("agent_audio_send_failed_" + type(error).__name__, self.ref)
+                    if not isinstance(error, ConnectionClosedOK):  # a clean close (end_call) is not a failure
+                        self.log.add("agent_audio_send_failed_" + type(error).__name__, self.ref)
                     await self.stop_socket()
                     await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
                     return

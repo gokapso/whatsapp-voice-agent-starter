@@ -9,7 +9,6 @@
 | `/operator/*` | Anyone who can reach the port | Absent (404) unless `OPERATOR_TOKEN` (32 or more characters, the "console access key") is set; the API needs `Authorization: Bearer` with a constant-time compare; browsers do not send that header by themselves, so there is no CSRF; the page has a strict CSP and no secrets; the console keeps the key in `sessionStorage` for one tab, never in a URL or `localStorage` |
 | Outbound calling | Operator only | Also needs `ENABLE_OUTBOUND=1`; a permission check before every connect; one attempt, never retried |
 | Voice provider | Server only | ElevenLabs: signed URL fetched by the server, host pinned to `wss://api.elevenlabs.io`. Grok Voice: `XAI_API_KEY` sent only as a header to `wss://api.x.ai/v1/realtime`. `DEV_AGENT_WS_URL` is loopback only |
-| TURN relay | Server only | `CLOUDFLARE_TURN_API_TOKEN` and the per-call TURN credentials never go to a browser or a log |
 | Calendar | Server only | `CAL_API_KEY` stays on the server; fixed host `https://api.cal.com`, no redirects, short timeouts; the model never sees Cal.com uids |
 | Bookings, recordings | Local disk only | No HTTP route serves files; `DATA_DIR` 0700 and files 0600 (SQLite journal included) under any umask |
 

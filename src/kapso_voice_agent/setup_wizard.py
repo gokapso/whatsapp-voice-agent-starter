@@ -30,7 +30,7 @@ CALENDARS = {
 }
 HOSTS = {
     "local": ("This computer", "Browser test calls only. WhatsApp needs a public host."),
-    "railway": ("Railway (recommended)", "HTTPS only, no inbound UDP: call audio relays through Cloudflare TURN."),
+    "railway": ("Railway (recommended)", "Test it by calling your WhatsApp number. Browser test calls run on this computer."),
     "vps": ("Linux server with a public IP", "WhatsApp audio reaches the server directly over UDP."),
 }
 KEY_HELP = {
@@ -38,20 +38,19 @@ KEY_HELP = {
     "XAI_API_KEY": "xAI API key (console.x.ai > API keys)",
     "CAL_API_KEY": "Cal.com API key (Settings > Security > API keys)",
     "KAPSO_API_KEY": "Kapso project API key",
-    "CLOUDFLARE_TURN_KEY_ID": "Cloudflare Realtime TURN key ID",
-    "CLOUDFLARE_TURN_API_TOKEN": "Cloudflare Realtime TURN key API token",
 }
-PLAIN = {"WHATSAPP_PHONE_NUMBER_ID": "Meta phone number ID (numeric, not the display number)",
-         "CLOUDFLARE_TURN_KEY_ID": KEY_HELP["CLOUDFLARE_TURN_KEY_ID"]}
+PLAIN = {"WHATSAPP_PHONE_NUMBER_ID": "Meta phone number ID (numeric, not the display number)"}
 VALUE = re.compile(r"^[A-Za-z0-9._~+/=:@-]{1,512}$")
 CLIPBOARDS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["clip.exe"])
 # What a hosted server reads. DATA_DIR comes from the image; DEV_AGENT_WS_URL is loopback-only.
 SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
                "OPERATOR_TOKEN", "CALLER_KEY_SECRET", "KAPSO_API_KEY", "WHATSAPP_PHONE_NUMBER_ID",
-               "WHATSAPP_WEBHOOK_SECRET", "META_GRAPH_VERSION", "ICE_SERVERS_JSON", "TURN_PROVIDER",
-               "CLOUDFLARE_TURN_KEY_ID", "CLOUDFLARE_TURN_API_TOKEN", "TURN_TRANSPORT", "ENABLE_OUTBOUND",
+               "WHATSAPP_WEBHOOK_SECRET", "META_GRAPH_VERSION", "ICE_SERVERS_JSON", "ENABLE_OUTBOUND",
                "MAX_SESSION_SECONDS", "MAX_CONCURRENT_CALLS", "LOCAL_CAPTURE", "CAPTURE_RETENTION_DAYS",
                "CAPTURE_MAX_COUNT")
+# Railway receives no inbound UDP. With a STUN server the server learns its public address, and
+# WhatsApp call audio reaches Meta's call servers directly (proven on a real call; docs/deploy.md).
+RAILWAY_ICE_SERVERS = '[{"urls":"stun:stun.cloudflare.com:3478"}]'
 
 
 class SetupError(Exception):
@@ -88,8 +87,6 @@ def needed_keys(provider, calendar, host, whatsapp):
     keys = ["XAI_API_KEY" if provider == "grok" else "ELEVENLABS_API_KEY"]
     if calendar == "calcom":
         keys.append("CAL_API_KEY")
-    if host == "railway":
-        keys += ["CLOUDFLARE_TURN_KEY_ID", "CLOUDFLARE_TURN_API_TOKEN"]
     if whatsapp:
         keys += ["KAPSO_API_KEY", "WHATSAPP_PHONE_NUMBER_ID"]
     return keys
@@ -142,8 +139,7 @@ def status_lines(settings, spec, host):
                                ("WHATSAPP_WEBHOOK_SECRET", settings.webhook_secret)) if not v]
     rows.append(("WhatsApp", "Kapso", "ready" if not whatsapp else "not set up (" + ", ".join(whatsapp) + ")"))
     if host == "railway":
-        media = (f"Cloudflare TURN ({settings.turn_transport})", "ready") if settings.turn_provider == "cloudflare" else \
-            ("TURN relay", "missing CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN")
+        media = ("direct", "ready for WhatsApp calls; browser test calls run on this computer")
     elif host == "vps":
         media = ("direct UDP", "open the host firewall to UDP (docs/deploy.md)")
     else:
@@ -211,9 +207,6 @@ def run(path, command, provider=None, calendar=None, host=None, whatsapp=None, p
             entered.append(key)
     # CALENDAR=calcom without a key would make the file invalid; empty means "not chosen yet".
     updates["CALENDAR"] = calendar if calendar == "local" or updates.get("CAL_API_KEY") or current.get("CAL_API_KEY") else ""
-    turn_ready = all((updates.get(k) or current.get(k)) for k in ("CLOUDFLARE_TURN_KEY_ID", "CLOUDFLARE_TURN_API_TOKEN"))
-    if host == "railway" and turn_ready:
-        updates["TURN_PROVIDER"] = "cloudflare"
     update_env(path, updates)
     try:
         settings = load_settings(env_file=path)
@@ -258,13 +251,15 @@ def server_variables(path, target):
             raise SetupError("CALENDAR=local is for development; a Cloud session loses it after each call. Use Cal.com")
         notes.append("Each Cloud session starts with an empty DATA_DIR: callers can change a booking only in the "
                      "call that made it (examples/pipecat-cloud/README.md).")
+    if target == "railway" and values.get("ICE_SERVERS_JSON", "[]") in ("", "[]"):
+        values["ICE_SERVERS_JSON"] = RAILWAY_ICE_SERVERS
     lines = [f"{key}={values[key]}" for key in keys if values.get(key)]
     if target == "railway":
         # Railway mounts volumes as root; the entrypoint hands DATA_DIR to the app user and drops root.
         # Host names without ports: Railway's deploy health check and the image's own health check.
-        lines += ["RAILWAY_RUN_UID=0", "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1"]
-        if values.get("TURN_PROVIDER") != "cloudflare" and values.get("ICE_SERVERS_JSON", "[]") in ("", "[]"):
-            notes.append("No TURN relay is set: browser and WhatsApp audio will not connect on Railway.")
+        # The server makes itself the number's webhook at startup when the number has none.
+        lines += ["RAILWAY_RUN_UID=0", "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1",
+                  "KAPSO_REGISTER_WEBHOOK=1"]
     if values.get("CALENDAR") == "local":
         notes.append("CALENDAR=local keeps bookings in the server's volume; use Cal.com for real callers.")
     if values.get("DEV_AGENT_WS_URL"):

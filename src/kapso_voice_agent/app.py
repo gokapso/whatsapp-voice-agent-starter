@@ -1,5 +1,8 @@
 """HTTP surface.
 
+At startup with KAPSO_REGISTER_WEBHOOK=1, the server makes itself the number's Meta webhook in
+Kapso when the number has none (register_webhook).
+
 Public (expose through your HTTPS ingress):
   GET  /healthz              -> {"ok": true}; no configuration details
   POST /webhooks/whatsapp    -> Kapso-signed Meta Calling webhook (raw-body HMAC, 1 MB cap)
@@ -24,6 +27,7 @@ import re
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from .agent_config import load_spec
@@ -33,8 +37,8 @@ from .config import load_settings
 from .events import EventLog
 from .outbound import OutboundError
 from .private import private_dir, prune_local_artifacts
+from .provider import SetupError, ensure_webhook
 from .recording import RecordingUnknown
-from .turn import TurnUnavailable
 
 STATIC = Path(__file__).parent / "static"
 MAX_WEBHOOK_BYTES = 1_000_000
@@ -89,6 +93,22 @@ def prune_once(settings, log):
         log.add("local_artifacts_pruned", captures=removed["captures"], vendor=removed["vendor"])
 
 
+async def register_webhook(settings, log, status, transport=None):
+    """KAPSO_REGISTER_WEBHOOK=1 (set for Railway): point the number's Meta webhook at this server
+    when the number has none. An existing webhook is never replaced. The outcome is in `status`
+    for the console and in the event log; the server starts either way."""
+    if not (settings.kapso_api_key and settings.phone_number_id and settings.webhook_secret and settings.public_domain):
+        status["state"] = "missing_settings"
+    else:
+        url = f"https://{settings.public_domain}/webhooks/whatsapp"
+        try:
+            with httpx.Client(timeout=20, follow_redirects=False, transport=transport) as client:
+                status["state"] = await asyncio.to_thread(ensure_webhook, settings, url, client)
+        except (SetupError, httpx.HTTPError, ValueError):
+            status["state"] = "failed"
+    log.add("kapso_webhook_" + status["state"])
+
+
 async def prune_periodically(settings, log, interval=PRUNE_INTERVAL_SECONDS):
     """Local retention without waiting for the next call: at startup, then every hour."""
     while True:
@@ -109,7 +129,7 @@ def open_calendar(settings, spec):
 
 
 def create_app(settings=None, spec=None, store=None, session_factory=ElevenSession,
-               connection_factory=make_connection, kapso_factory=None, recording_reader=None):
+               connection_factory=make_connection, kapso_factory=None, recording_reader=None, platform_transport=None):
     settings = settings or load_settings()
     spec = spec or load_spec(settings.agent_config_path)
     # DATA_DIR holds bookings, captures and provider downloads: 0700 before anything is written.
@@ -120,11 +140,15 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
                           connection_factory=connection_factory, kapso_factory=kapso_factory,
                           recording_reader=recording_reader)
 
+    kapso_webhook = {"state": None}  # set by register_webhook when KAPSO_REGISTER_WEBHOOK=1
+
     @asynccontextmanager
     async def lifespan(app):
         pruner = asyncio.create_task(prune_periodically(settings, log))
         if settings.agent_ready:
             manager.spawn(manager.recording.warm())
+        if settings.register_webhook:
+            manager.spawn(register_webhook(settings, log, kapso_webhook, platform_transport))
         try:
             yield
         finally:
@@ -204,11 +228,6 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
                 "offline_fake_agent": bool(settings.dev_agent_ws_url), "setup_step": setup_step,
                 "problem": log.provider_problem}
 
-    def call_audio():
-        if settings.turn_provider == "cloudflare":
-            return "cloudflare_turn"
-        return "ice_servers" if json.loads(settings.ice_servers_json) else "direct"
-
     @api.get("/state")
     async def state():
         calls = manager.snapshot()
@@ -218,7 +237,7 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
         return {"calls_ready": settings.calls_ready, "agent_ready": settings.agent_ready,
                 "agent_missing": settings.agent_missing(),  # setting names only, never values
                 "voice": voice_status(), "calendar": settings.calendar or None,
-                "whatsapp_missing": whatsapp_missing, "call_audio": call_audio(),
+                "whatsapp_missing": whatsapp_missing, "kapso_webhook": kapso_webhook["state"],
                 "outbound_enabled": settings.enable_outbound, "local_capture": settings.local_capture,
                 "recording": manager.recording.status(),
                 "max_concurrent_calls": settings.max_concurrent_calls, "busy": manager.busy(),
@@ -233,10 +252,6 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             ref, answer = await manager.start_browser_call(offer.sdp)
         except RecordingUnknown:
             raise HTTPException(503, "Could not read the agent's recording setting; no call started") from None
-        except TurnUnavailable:
-            log.add("turn_credentials_failed")
-            raise HTTPException(503, "Could not get TURN relay credentials; no call started. "
-                                     "Check CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN") from None
         except RuntimeError as error:
             if str(error) == "busy":
                 raise HTTPException(409, "Already at MAX_CONCURRENT_CALLS") from None

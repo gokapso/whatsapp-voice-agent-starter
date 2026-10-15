@@ -149,12 +149,21 @@ function voiceName(voice) {
 
 const PROBLEMS = {
   auth: voice => `${vendor(voice)} rejected the API key. Check ${voice.provider === 'grok' ? 'XAI_API_KEY' : 'ELEVENLABS_API_KEY'} in the .env file of the server, then restart the server.`,
+  billing: voice => `${vendor(voice)} refused the session: the account is out of credits or over its spending limit. Add credits or raise the limit in the ${vendor(voice)} billing settings, then try again.`,
   rate_limited: voice => `${vendor(voice)} is limiting requests for this key. Wait one minute, then start the call again.`,
   not_found: voice => (voice.provider === 'grok'
     ? `xAI did not open ${voice.model}. Check grok.model in agent/agent.toml, and that your xAI team can use Grok Voice.`
     : 'ElevenLabs did not find the agent. Check ELEVENLABS_AGENT_ID, or run uv run voice-agent agent apply.'),
   unreachable: voice => `Unable to reach ${vendor(voice)} from the server. Check its internet connection, then try again.`,
   failed: voice => `${vendor(voice)} ended the session before it was ready. Open the technical event log for details, then try again.`,
+};
+
+// KAPSO_REGISTER_WEBHOOK=1: why the server could not make itself the number's webhook.
+const WEBHOOK_PROBLEMS = {
+  other: ['Your number sends its webhook to another server. Remove that webhook in the Kapso dashboard, then restart this server.'],
+  failed: ['Unable to register this server as the webhook of your number. Check ', {code: 'KAPSO_API_KEY'}, ' and ',
+    {code: 'WHATSAPP_PHONE_NUMBER_ID'}, ', then restart this server.'],
+  missing_settings: ['Unable to register the webhook: this server has no public domain. Add one in Railway, then restart this server.'],
 };
 
 function connectedWhatsAppCall() {
@@ -186,6 +195,9 @@ function nextStep() {
   if (state.whatsapp_missing.length) {
     return {blocking: false, parts: ['Next: after a good test call, host this server and connect your WhatsApp number. See ',
       {code: 'docs/deploy.md'}, '.']};
+  }
+  if (WEBHOOK_PROBLEMS[state.kapso_webhook]) {
+    return {blocking: false, parts: WEBHOOK_PROBLEMS[state.kapso_webhook]};
   }
   const call = connectedWhatsAppCall();
   if (!call) {
@@ -266,17 +278,16 @@ function renderSetup() {
     : setupRow('Recording notice', recorded ? 'ok' : 'info', recorded ? 'Callers hear “This call is recorded.”' : 'No recording notice',
       recorded && voice.provider === 'grok' && !voice.offline_fake_agent ? 'xAI keeps API traffic for 30 days.' : ''));
 
-  rows.push(setupRow('Call audio', 'info', {cloudflare_turn: 'Cloudflare TURN relay', ice_servers: 'Your ICE servers',
-    direct: 'Direct, no TURN relay'}[state.call_audio],
-  state.call_audio === 'direct' ? 'Works on this computer and on a server with open UDP. Railway needs a TURN relay.' : ''));
-
   if (state.whatsapp_missing.length) {
     rows.push(setupRow('WhatsApp', 'info', 'Not connected', ['Needs ', ...codeList(state.whatsapp_missing), '.']));
+  } else if (WEBHOOK_PROBLEMS[state.kapso_webhook]) {
+    rows.push(setupRow('WhatsApp', 'todo', 'Webhook not connected', WEBHOOK_PROBLEMS[state.kapso_webhook]));
   } else {
     const call = connectedWhatsAppCall();
+    const webhook = ['registered', 'present'].includes(state.kapso_webhook) ? 'The webhook of the number points to this server. ' : '';
     rows.push(setupRow('WhatsApp', call ? 'ok' : 'info', 'Configured through Kapso', call
       ? `A call connected at ${clock.format(new Date(call.connected_at))}.`
-      : 'Not proven yet. Call the number from a phone.'));
+      : `${webhook}Not proven yet. Call the number from a phone.`));
   }
 
   rows.push(state.outbound_enabled
@@ -310,7 +321,7 @@ function recentItem(call) {
     status = 'Audio did not connect';
   }
   const tools = !call.tools ? 'No tool calls' : (plural.select(call.tools) === 'one' ? '1 tool call' : `${call.tools} tool calls`);
-  const media = {direct: 'direct audio', relay: 'audio through TURN'}[call.media];
+  const media = {direct: 'direct audio', relay: 'relayed audio'}[call.media];
 
   const item = document.createElement('li');
   item.className = 'recent-item';
@@ -440,7 +451,7 @@ $('#start').onclick = async () => {
         renderReadiness();
       } else if (['failed', 'closed', 'disconnected'].includes(peer.connectionState)) {
         callEnded(peer.connectionState === 'failed' && !callStartedAt
-          ? 'The audio could not connect. A remote server needs a TURN relay. See docs/deploy.md.' : '');
+          ? 'The audio could not connect. Browser test calls work when the server runs on your computer. On Railway, call your WhatsApp number instead.' : '');
       }
     };
     microphone.getTracks().forEach(track => peer.addTrack(track, microphone));

@@ -4,7 +4,7 @@
 //
 // One service built from the repository's Dockerfile, one 1 GB volume for DATA_DIR, one replica
 // (call state is in memory and a volume cannot be shared by replicas). Railway has no inbound
-// UDP, so call audio needs TURN: set TURN_PROVIDER=cloudflare and its two keys.
+// UDP: with a STUN server, WhatsApp call audio still reaches Meta's call servers directly.
 //
 // No secret is written here. preserve() keeps each value already set on the service, with
 // `voice-agent railway variables --yes` or the dashboard. Set them before the first apply.
@@ -27,6 +27,9 @@ export default defineRailway(() => {
       RAILWAY_RUN_UID: "0",
       // Without ports. healthcheck.railway.app is the host Railway's deploy health check uses.
       ALLOWED_HOSTS: "${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1",
+      ICE_SERVERS_JSON: '[{"urls":"stun:stun.cloudflare.com:3478"}]',
+      // At startup the server makes itself the number's Meta webhook in Kapso, if the number has none.
+      KAPSO_REGISTER_WEBHOOK: "1",
       VOICE_PROVIDER: preserve(),
       XAI_API_KEY: preserve(),
       ELEVENLABS_API_KEY: preserve(),
@@ -38,9 +41,6 @@ export default defineRailway(() => {
       KAPSO_API_KEY: preserve(),
       WHATSAPP_PHONE_NUMBER_ID: preserve(),
       WHATSAPP_WEBHOOK_SECRET: preserve(),
-      TURN_PROVIDER: preserve(),
-      CLOUDFLARE_TURN_KEY_ID: preserve(),
-      CLOUDFLARE_TURN_API_TOKEN: preserve(),
     },
   });
   return project("whatsapp-voice-agent", { resources: [agent, data] });

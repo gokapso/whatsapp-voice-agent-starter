@@ -14,6 +14,7 @@ import pytest
 from websockets.asyncio.server import serve
 
 from conftest import TOKEN, KapsoRecorder, ToneTrack, asgi_client, fixture, listen, post_webhook, tool_call, wait_for_event
+from kapso_voice_agent import bridge
 from kapso_voice_agent.app import create_app
 from kapso_voice_agent.bridge import ElevenSession
 
@@ -289,3 +290,36 @@ def test_browser_call_uses_operator_api_and_its_own_caller_identity(settings, sp
     assert busy.status_code == 409 and hangup.status_code == 200
     assert agent.sessions[0].closed and not app.state.manager.jobs
     assert agent.sessions[0].bridge.tools.caller != app.state.manager.caller_key("US.100000000000000001")
+
+
+def test_browser_call_whose_audio_never_connects_frees_the_call_slot(settings, spec, store, monkeypatch):
+    # A browser call can fail to connect its audio (Railway receives no inbound UDP). The failed call
+    # must end and free the only call slot; otherwise the next phone call is rejected as busy.
+    monkeypatch.setattr(bridge, "CONNECT_TIMEOUT_SECONDS", 1)
+
+    async def go():
+        async def silent(socket):
+            await asyncio.Future()
+        async with Harness(silent) as agent:
+            app = create_app(replace(settings, max_session_seconds=60), spec, store, session_factory=agent.factory(),
+                             kapso_factory=KapsoRecorder().factory())
+            manager = app.state.manager
+            peer = RTCPeerConnection()
+            peer.addTrack(ToneTrack())
+            try:
+                await peer.setLocalDescription(await peer.createOffer())
+                async with asgi_client(app) as client:
+                    response = await client.post("/operator/api/browser-call", json={"sdp": peer.localDescription.sdp},
+                                                 headers={"authorization": f"Bearer {TOKEN}"})
+                    assert response.status_code == 200, response.text
+                    assert manager.busy()
+                    # The browser never applies the answer, so the server's ICE checks go nowhere.
+                    await wait_for_event(app.state.log, "session_closed", timeout=15)
+                    events = [e["event"] for e in app.state.log.events]
+                    return events, manager.busy(), dict(manager.jobs), agent.sessions[0].closed
+            finally:
+                await manager.shutdown()
+                await peer.close()
+    events, busy, jobs, closed = asyncio.run(go())
+    assert "rtc_connect_timed_out" in events and "agent_socket_connected" not in events
+    assert not busy and not jobs and closed

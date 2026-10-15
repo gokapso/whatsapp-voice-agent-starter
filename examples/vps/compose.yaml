@@ -1,5 +1,5 @@
 # One Linux server with a public IP (for example a Hetzner, DigitalOcean or OVH VPS). The
-# simplest setup where WhatsApp audio reaches the server directly, without TURN.
+# setup where WhatsApp audio and browser test calls both reach the server directly.
 #
 #   cp ../../.env .env               # from `voice-agent setup --host vps`; keep it 0600
 #   VOICE_AGENT_DOMAIN=voice.example.com docker compose up -d --build

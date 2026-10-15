@@ -8,14 +8,14 @@ from kapso_voice_agent import cli, setup_wizard
 from kapso_voice_agent.config import load_settings
 from kapso_voice_agent.setup_wizard import Prompter, SetupError, export_env, run, update_env
 
-XAI_KEY, CF_TOKEN = "xai-wizard-key-not-real", "cf-wizard-token-not-real"
+XAI_KEY = "xai-wizard-key-not-real"
 
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     for key in list(os.environ):
         if key.startswith(("KAPSO_", "ELEVENLABS_", "WHATSAPP_", "OPERATOR_", "CALLER_", "DEV_AGENT_", "CAL_", "CALENDAR",
-                           "VOICE_", "XAI_", "TURN_", "CLOUDFLARE_", "AGENT_CONFIG_PATH", "DATA_DIR")):
+                           "VOICE_", "XAI_", "ICE_SERVERS_JSON", "AGENT_CONFIG_PATH", "DATA_DIR")):
             monkeypatch.delenv(key)
 
 
@@ -34,17 +34,16 @@ def mode(path):
 
 def test_grok_on_railway_writes_a_valid_private_file_and_never_prints_keys(tmp_path):
     path = tmp_path / ".env"
-    prompter, printed = scripted(["2", "2", "2", "n", "cf-key-id-1"], [XAI_KEY, CF_TOKEN])
+    prompter, printed = scripted(["2", "2", "2", "n"], [XAI_KEY])
     result = run(path, "voice-agent", prompter=prompter)
     settings = load_settings(env_file=path)
     text = "\n".join(printed)
     assert result["created"] and mode(path) == "0o600"
     assert settings.voice_provider == "grok" and settings.xai_api_key == XAI_KEY and settings.calendar == "local"
-    assert settings.turn_provider == "cloudflare" and settings.cloudflare_turn_api_token == CF_TOKEN
     assert settings.agent_ready and settings.operator_enabled
-    assert XAI_KEY not in text and CF_TOKEN not in text and settings.operator_token not in text
+    assert XAI_KEY not in text and settings.operator_token not in text
     assert "Grok Voice (grok-voice-3.0, voice eve)" in text and "docs/deploy.md" in text
-    assert "Cloudflare TURN (tls)" in text and "xAI bills per minute" in text
+    assert "ready for WhatsApp calls" in text and "xAI bills per minute" in text and "TURN" not in text
 
 
 def test_existing_file_keeps_its_other_lines_and_skipped_keys_stay_missing(tmp_path):
@@ -92,9 +91,11 @@ def test_export_for_railway_adds_host_settings_and_leaves_out_local_only_ones(tm
     keys = [line.split("=", 1)[0] for line in lines]
     assert "XAI_API_KEY" in keys and "OPERATOR_TOKEN" in keys and "RAILWAY_RUN_UID" in keys
     assert "ALLOWED_HOSTS=${{RAILWAY_PUBLIC_DOMAIN}},healthcheck.railway.app,127.0.0.1" in lines
+    assert "ICE_SERVERS_JSON=" + setup_wizard.RAILWAY_ICE_SERVERS in lines  # the STUN-only setup a real call proved
+    assert "KAPSO_REGISTER_WEBHOOK=1" in lines
     assert "DEV_AGENT_WS_URL" not in keys and "DATA_DIR" not in keys
     notes = "\n".join(printed)
-    assert "No TURN relay" in notes and "CALENDAR=local" in notes
+    assert "CALENDAR=local" in notes and "TURN" not in notes
 
 
 def test_export_for_pipecat_cloud_writes_a_private_file_without_console_or_webhook_secrets(tmp_path):

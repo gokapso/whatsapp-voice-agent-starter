@@ -17,11 +17,12 @@ WhatsApp caller ──(Meta WebRTC audio, UDP)───────────�
                                                          └─> SQLite (which caller owns which booking)
 ```
 
-- HTTPS carries webhooks, SDP and call actions. Audio uses its own WebRTC path (ICE, maybe TURN).
+- HTTPS carries webhooks, SDP and call actions. Audio uses its own WebRTC path (ICE; on Railway,
+  a STUN server lets it reach Meta's call servers directly).
 - The voice provider owns the conversation: ElevenLabs Agents by default, or xAI Grok Voice with
   `VOICE_PROVIDER=grok` (`grok_bridge.py`). Pipecat is only the audio transport and pipeline runner.
-- One real outbound WhatsApp call reached a handset with this bridge (2026-10-07, earlier booking
-  tools). The same call code can also run in a Pipecat Cloud session (below).
+- A real inbound WhatsApp call worked end to end on Railway with Grok Voice (2026-10-14), and one
+  real outbound call reached a handset with ElevenLabs (2026-10-07, earlier booking tools). The same call code can also run in a Pipecat Cloud session (below).
 
 ## Inbound call sequence
 
@@ -73,7 +74,6 @@ is no webhook route, console or persistent `DATA_DIR`.
 | `src/kapso_voice_agent/bridge.py` | Pipecat pipeline + ElevenLabs WebSocket protocol; picks the bridge for `VOICE_PROVIDER` | `test_call_flow.py` |
 | `src/kapso_voice_agent/grok_bridge.py` | xAI Grok Voice realtime protocol in the same pipeline slot | `test_grok_bridge.py` |
 | `src/kapso_voice_agent/cloud.py` | Pipecat Cloud entry: Kapso launch body, Kapso lookup, then `CallManager` | `test_cloud_launch.py` |
-| `src/kapso_voice_agent/turn.py` | Per-call ICE servers; Cloudflare TURN credentials | `test_turn.py` |
 | `src/kapso_voice_agent/setup_wizard.py` | `voice-agent setup`, `export-env`, `railway variables` | `test_setup_wizard.py` |
 | `src/kapso_voice_agent/kapso.py` | Kapso call-action client | via flow tests |
 | `src/kapso_voice_agent/tools.py` | Tool schemas (source of truth) and dispatcher | `test_tools.py` |
@@ -81,7 +81,7 @@ is no webhook route, console or persistent `DATA_DIR`.
 | `src/kapso_voice_agent/business.py` | Owner's business facts, spoken day and time phrases | `test_tools.py`, `test_calcom.py` |
 | `src/kapso_voice_agent/store.py` | Local development calendar in SQLite (`CALENDAR=local`) | `test_tools.py` |
 | `src/kapso_voice_agent/agent_config.py` | agent.toml → provider config, greetings, read-back diff | `test_agent_config.py` |
-| `src/kapso_voice_agent/provider.py` | Dry-run/apply for ElevenLabs agent and Kapso webhook | `test_setup_and_artifacts.py` |
+| `src/kapso_voice_agent/provider.py` | Dry-run/apply for ElevenLabs agent and Kapso webhook; startup webhook registration rule | `test_setup_and_artifacts.py`, `test_http_surface.py` |
 | `src/kapso_voice_agent/recording.py` | Recording notice from the provider's stored setting + local capture | `test_privacy_and_retention.py` |
 | `src/kapso_voice_agent/private.py` | 0700/0600 data directory and files, local retention pruning | `test_privacy_and_retention.py` |
 | `src/kapso_voice_agent/capture.py` | Optional local WAV + turn capture | `test_call_flow.py`, `test_setup_and_artifacts.py` |
@@ -93,9 +93,8 @@ is no webhook route, console or persistent `DATA_DIR`.
 | `agent/` | Editable prompt, settings, business facts, development calendar data | `test_agent_config.py` |
 | `agent/provider-tests/` | Opt-in ElevenLabs agent tests (LLM-judged, run by the operator) | `test_agent_config.py` (shape only) |
 | `scripts/smoke_setup.py`, `smoke_local.py` | Development smoke checks with real processes, offline | run by hand |
-| `scripts/smoke_turn_relay.py` | Docker: image as Railway runs it, audio only through a coturn relay | run by hand |
 | `examples/pipecat-cloud/` | `bot.py`, Dockerfile on Pipecat's base image, `pcc-deploy.toml` | `test_cloud_launch.py`; container check in its README |
-| `.railway/railway.ts`, `docker-entrypoint.sh`, `examples/vps/` | Railway project, root hand-off for volumes, VPS Compose + Caddy | `scripts/smoke_turn_relay.py` |
+| `.railway/railway.ts`, `docker-entrypoint.sh`, `examples/vps/` | Railway project, root hand-off for volumes, VPS Compose + Caddy | `test_setup_wizard.py`, a real deploy |
 
 ## Contracts
 
@@ -108,7 +107,7 @@ Small, stable interfaces. Change them only together with their tests.
 | `GET /healthz` | none | — | `{"ok": true}` |
 | `POST /webhooks/whatsapp` | `X-Webhook-Signature` = hex HMAC-SHA256(raw body, `WHATSAPP_WEBHOOK_SECRET`) | Meta webhook JSON, ≤ 1 MB | `{"calls": n, "statuses": n, "ignored": n}`; 401 bad signature; 400 not JSON; 413 too large; 503 secret unset, or an inbound connect while the agent is not configured |
 | `GET /operator/`, `/operator/app.js`, `/operator/console.css` | none (page has no secrets); 404 if `OPERATOR_TOKEN` unset | — | console and assets |
-| `GET /operator/api/state` | `Authorization: Bearer <OPERATOR_TOKEN>` (the console access key) | — | readiness flags, `agent_missing` (setting names), `whatsapp_missing`, `call_audio` (`direct`\|`cloudflare_turn`\|`ice_servers`), `voice` `{provider: elevenlabs\|grok, label, model, voice, offline_fake_agent, setup_step: null\|api_key\|create_agent, problem: null\|{problem: auth\|rate_limited\|not_found\|unreachable\|failed, at}}`, `calendar` (`calcom`\|`local`\|null), `recording` `{provider_recording: on\|off\|unknown\|not_checked\|off (offline fake agent), local_capture, agent_toml_record_audio, next_greeting_says_recorded: true\|false\|null, last_check_error}`, active calls `{ref, direction, state}`, `recent_calls` (newest 6 in the event log: `{ref, kind, started_at, connected_at, last_at, media, tools, problem, active}`), events, native artifact notices |
+| `GET /operator/api/state` | `Authorization: Bearer <OPERATOR_TOKEN>` (the console access key) | — | readiness flags, `agent_missing` (setting names), `whatsapp_missing`, `kapso_webhook` (null when `KAPSO_REGISTER_WEBHOOK` is off\|`registered`\|`present`\|`other`\|`failed`\|`missing_settings`), `voice` `{provider: elevenlabs\|grok, label, model, voice, offline_fake_agent, setup_step: null\|api_key\|create_agent, problem: null\|{problem: auth\|billing\|rate_limited\|not_found\|unreachable\|failed, at}}`, `calendar` (`calcom`\|`local`\|null), `recording` `{provider_recording: on\|off\|unknown\|not_checked\|off (offline fake agent), local_capture, agent_toml_record_audio, next_greeting_says_recorded: true\|false\|null, last_check_error}`, active calls `{ref, direction, state}`, `recent_calls` (newest 6 in the event log: `{ref, kind, started_at, connected_at, last_at, media, tools, problem, active}`), events, native artifact notices |
 | `POST /operator/api/browser-call` | bearer | `{"sdp": "<offer>"}` | `{"ref", "type": "answer", "sdp"}`; 409 at capacity; 503 agent not ready (lists what is missing) or recording setting unknown |
 | `POST /operator/api/calls/{ref}/hangup` | bearer | — | `{"ended": true}`; 404 unknown ref |
 | `POST /operator/api/outbound/permission` | bearer + `ENABLE_OUTBOUND=1` | `{"recipient": "<E.164 digits or US.…>"}` | `{"permission_status", "can_call"}` |
@@ -210,18 +209,13 @@ No SQLite transaction stays open during a Cal.com request. Each local write is o
 
 ### Events with fields
 
-`rtc_connected` carries `media`: `direct` (host or STUN-mapped address), `relay` (through TURN)
-or `unknown`. `provider_problem_<code>` is logged with the same codes as `voice.problem`.
-`turn_credentials_failed`: TURN was configured but no credentials came back; no call starts
-(browser 503, outbound 503, inbound `reject`).
-
-### Cloudflare TURN (`TURN_PROVIDER=cloudflare`)
-
-Before each call: `POST https://rtc.live.cloudflare.com/v1/turn/keys/{CLOUDFLARE_TURN_KEY_ID}/credentials/generate-ice-servers`
-with `Authorization: Bearer {CLOUDFLARE_TURN_API_TOKEN}` and `{"ttl": MAX_SESSION_SECONDS + 600}`,
-5 s timeout, no redirects. From the returned `iceServers`, the server keeps the first STUN URL
-and exactly one TURN URL for `TURN_TRANSPORT` (`tls`: `turns:…:443?transport=tcp`; `tcp`;
-`udp`), because aiortc uses only the first of each.
+`rtc_connected` carries `media`: `direct` (host or STUN-mapped address), `relay` (through a relay
+server in `ICE_SERVERS_JSON`) or `unknown`. `provider_problem_<code>` is logged with the same codes
+as `voice.problem`. `rtc_connect_timed_out`: the call's audio did not connect within 30 seconds;
+the session ends and frees its call slot (an inbound call then gets `terminate`).
+`kapso_webhook_<state>` (one per startup with `KAPSO_REGISTER_WEBHOOK=1`): the same states as
+`kapso_webhook` in `/operator/api/state`. `other` means another URL already receives the number's
+Meta events; it is left alone.
 
 ### xAI realtime WebSocket (Grok Voice, subset used)
 
