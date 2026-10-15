@@ -9,8 +9,12 @@ import http
 import json
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
+from pipecat.frames.frames import EndWorkerFrame, InputAudioRawFrame
+from pipecat.processors.frame_processor import FrameDirection
 import pytest
 from websockets.asyncio.server import serve
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from websockets.frames import Close
 
 from conftest import TOKEN, KapsoRecorder, ToneTrack, asgi_client, listen
 from kapso_voice_agent import grok_bridge
@@ -18,7 +22,7 @@ from kapso_voice_agent.agent_config import load_spec
 from kapso_voice_agent.app import create_app
 from kapso_voice_agent.bridge import AgentSession, session_context
 from kapso_voice_agent.config import REPO_ROOT, ConfigError, load_settings
-from kapso_voice_agent.events import EventLog
+from kapso_voice_agent.events import CALL_PROBLEM, EventLog
 from kapso_voice_agent.grok_bridge import GrokAgentBridge, GrokRefused, grok_endpoint, grok_tools, session_update
 from kapso_voice_agent.recording import RecordingCheck
 from kapso_voice_agent.tools import TOOLS
@@ -396,6 +400,7 @@ def test_browser_call_runs_greeting_tool_audio_and_end_call_over_real_webrtc(gro
 
 
 @pytest.mark.parametrize("status,problem", [(http.HTTPStatus.UNAUTHORIZED, "auth"),
+                                            (http.HTTPStatus.PAYMENT_REQUIRED, "billing"),
                                             (http.HTTPStatus.TOO_MANY_REQUESTS, "rate_limited"),
                                             (http.HTTPStatus.NOT_FOUND, "not_found"),
                                             (http.HTTPStatus.BAD_GATEWAY, "unreachable")])
@@ -459,3 +464,23 @@ def test_allowed_hosts_with_a_port_are_refused_because_they_never_match():
         load_settings(environ={"ALLOWED_HOSTS": "voice.example.test,127.0.0.1:8080"})
     assert load_settings(environ={"ALLOWED_HOSTS": "voice.example.test,127.0.0.1,[::1]"}).allowed_hosts == (
         "voice.example.test", "127.0.0.1", "[::1]")
+
+
+@pytest.mark.parametrize("error,logged", [(ConnectionClosedOK(Close(1000, ""), Close(1000, ""), True), False),
+                                          (ConnectionClosedError(None, None), True)])
+def test_caller_audio_after_a_clean_agent_close_is_not_a_failure(grok, spec, store, error, logged):
+    # end_call closes the agent socket while caller audio is still arriving. That last send is
+    # expected to fail cleanly; only an abnormal close is a problem for the operator console.
+    async def go():
+        bridge, _ = offline_bridge(grok, spec, store)
+        bridge.ready.set()
+
+        async def closed(raw):
+            raise error
+        bridge.websocket.send = closed
+        bridge.input_buffer.extend(b"\0" * 3200)
+        await GrokAgentBridge.process_frame(bridge, InputAudioRawFrame(b"\0" * 320, 16000, 1), FrameDirection.DOWNSTREAM)
+        return bridge
+    bridge = asyncio.run(go())
+    assert any(CALL_PROBLEM.match(e["event"]) for e in bridge.log.events) is logged
+    assert isinstance(bridge.pushed[-1], EndWorkerFrame)

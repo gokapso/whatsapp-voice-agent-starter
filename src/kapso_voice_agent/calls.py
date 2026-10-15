@@ -20,7 +20,6 @@ from .events import call_ref
 from .kapso import KapsoClient
 from .outbound import OutboundCalls
 from .recording import RecordingCheck
-from .turn import call_ice_servers
 
 ARTIFACT_EVENTS = {"call_recording_available": ("call_recording", "audio"),
                    "call_transcription_available": ("call_transcript", "document"),
@@ -40,11 +39,9 @@ def valid_id(value):
 
 class CallManager:
     def __init__(self, settings, spec, store, log, session_factory=ElevenSession,
-                 connection_factory=make_connection, kapso_factory=None, recording_reader=None,
-                 ice_factory=call_ice_servers):
+                 connection_factory=make_connection, kapso_factory=None, recording_reader=None):
         self.settings, self.spec, self.store, self.log = settings, spec, store, log
         self.session_factory, self.connection_factory = session_factory, connection_factory
-        self.ice_factory = ice_factory  # per-call ICE servers (TURN credentials when configured)
         self.kapso_factory = kapso_factory or (lambda: KapsoClient(settings.kapso_api_key, settings.phone_number_id,
                                                                    settings.meta_graph_version))
         self.sessions, self.jobs = {}, {}
@@ -192,7 +189,7 @@ class CallManager:
             async with asyncio.timeout(ANSWER_TIMEOUT_SECONDS):
                 # Unknown recording state raises here, before pre_accept, so the call is rejected.
                 recording = await self.recording.current()
-                connection = self.connection_factory(await self.ice_factory(self.settings))
+                connection = self.connection_factory(self.settings.ice_servers_json)
                 await connection.initialize(sdp=call["session"]["sdp"], type="offer")
                 answer = meta_sdp(connection.get_answer()["sdp"])
                 # Media is ready and silent; the agent starts only after accept succeeds.
@@ -238,12 +235,11 @@ class CallManager:
 
     async def start_browser_call(self, offer_sdp):
         recording = await self.recording.current()  # raises RecordingUnknown; read outside the lock
-        ice = await self.ice_factory(self.settings)  # raises TurnUnavailable; network, outside the lock
         async with self.lock:
             if self.busy():
                 raise RuntimeError("busy")
             ref = "browser-" + secrets.token_hex(8)
-            connection = self.connection_factory(ice)
+            connection = self.connection_factory(self.settings.ice_servers_json)
             session = None
             try:
                 await connection.initialize(sdp=offer_sdp, type="offer")

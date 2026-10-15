@@ -58,10 +58,7 @@ These start real server processes on free loopback ports with temporary data:
 ```sh
 uv run python scripts/smoke_setup.py      # init, check and serve in a clean environment, then a stand-in call
 uv run python scripts/smoke_local.py      # health, webhook signature, console access, stand-in call
-uv run python scripts/smoke_turn_relay.py # Docker: the image as Railway runs it, audio only through TURN
 ```
-
-Build the image first for the TURN check: `docker build -t kapso-voice-starter:dev .`
 
 ## Level 2: browser call
 
@@ -125,14 +122,13 @@ repository. They use LLM credits.
 Do this after level 2 passes, on a hosted server ([`deploy.md`](deploy.md)). Every call rings a
 real phone and costs money. Get permission for each call.
 
-1. On the hosted server, the browser test call shows `media=relay` (Railway) or `media=direct`
-   (a server with open UDP) in `rtc_connected`.
-2. Register the Kapso webhook. Make sure no dashboard voice agent answers the number.
-3. Call the number from WhatsApp. Repeat browser checks 1, 2, 4, 6, 7, 10, 14 and 15.
-4. Hang up yourself once, and let Riley end one call.
-5. For each call, check the event log: `pre_accept_ok` and `accept_ok` before
-   `agent_socket_connected`, then `first_audio_in` and `first_audio_out`. At the end,
-   `terminate_ok` when Riley hung up, or `call_terminated` when you did.
+1. Register the Kapso webhook. Make sure no dashboard voice agent answers the number.
+2. Call the number from WhatsApp. Repeat browser checks 1, 2, 4, 6, 7, 10, 14 and 15.
+3. Hang up yourself once, and let Riley end one call.
+4. For each call, check the event log: `pre_accept_ok` and `accept_ok`, then `rtc_connected`
+   with `media=direct`, `agent_socket_connected`, `first_audio_in` and `first_audio_out`. At the
+   end, `terminate_ok` when Riley hung up, or `call_terminated` when you did. Neither call shows
+   **Problem** under Recent calls.
 
 Outbound calls (only with `ENABLE_OUTBOUND=1` and the person's permission): check the permission,
 a declined call, an unanswered call and an answered call.

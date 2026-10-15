@@ -149,6 +149,7 @@ function voiceName(voice) {
 
 const PROBLEMS = {
   auth: voice => `${vendor(voice)} rejected the API key. Check ${voice.provider === 'grok' ? 'XAI_API_KEY' : 'ELEVENLABS_API_KEY'} in the .env file of the server, then restart the server.`,
+  billing: voice => `${vendor(voice)} refused the session: the account is out of credits or over its spending limit. Add credits or raise the limit in the ${vendor(voice)} billing settings, then try again.`,
   rate_limited: voice => `${vendor(voice)} is limiting requests for this key. Wait one minute, then start the call again.`,
   not_found: voice => (voice.provider === 'grok'
     ? `xAI did not open ${voice.model}. Check grok.model in agent/agent.toml, and that your xAI team can use Grok Voice.`
@@ -266,10 +267,6 @@ function renderSetup() {
     : setupRow('Recording notice', recorded ? 'ok' : 'info', recorded ? 'Callers hear “This call is recorded.”' : 'No recording notice',
       recorded && voice.provider === 'grok' && !voice.offline_fake_agent ? 'xAI keeps API traffic for 30 days.' : ''));
 
-  rows.push(setupRow('Call audio', 'info', {cloudflare_turn: 'Cloudflare TURN relay', ice_servers: 'Your ICE servers',
-    direct: 'Direct, no TURN relay'}[state.call_audio],
-  state.call_audio === 'direct' ? 'Works on this computer and on a server with open UDP. Railway needs a TURN relay.' : ''));
-
   if (state.whatsapp_missing.length) {
     rows.push(setupRow('WhatsApp', 'info', 'Not connected', ['Needs ', ...codeList(state.whatsapp_missing), '.']));
   } else {
@@ -310,7 +307,7 @@ function recentItem(call) {
     status = 'Audio did not connect';
   }
   const tools = !call.tools ? 'No tool calls' : (plural.select(call.tools) === 'one' ? '1 tool call' : `${call.tools} tool calls`);
-  const media = {direct: 'direct audio', relay: 'audio through TURN'}[call.media];
+  const media = {direct: 'direct audio', relay: 'relayed audio'}[call.media];
 
   const item = document.createElement('li');
   item.className = 'recent-item';
@@ -440,7 +437,7 @@ $('#start').onclick = async () => {
         renderReadiness();
       } else if (['failed', 'closed', 'disconnected'].includes(peer.connectionState)) {
         callEnded(peer.connectionState === 'failed' && !callStartedAt
-          ? 'The audio could not connect. A remote server needs a TURN relay. See docs/deploy.md.' : '');
+          ? 'The audio could not connect. Browser test calls work when the server runs on your computer. On Railway, call your WhatsApp number instead.' : '');
       }
     };
     microphone.getTracks().forEach(track => peer.addTrack(track, microphone));

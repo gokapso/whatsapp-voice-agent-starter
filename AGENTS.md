@@ -14,8 +14,10 @@ recognition, the LLM and text-to-speech. Tools run here, against the owner's Cal
 console can start the same session from a browser, which is how people test the agent before
 connecting a number.
 
-The voice provider does not decide where the server runs. Railway (with a TURN relay) is the
-recommended host; `docs/deploy.md` covers it, a VPS, and the advanced Pipecat Cloud option
+The voice provider does not decide where the server runs. Railway is the recommended host:
+WhatsApp call audio reaches Meta's call servers directly from it with only a STUN server. Test a
+Railway server by calling the number; browser test calls need the server on your computer or on
+a public IP. `docs/deploy.md` covers Railway, a VPS, and the advanced Pipecat Cloud option
 (`cloud.py`, `examples/pipecat-cloud`), where each call runs in its own session.
 
 Riley is a generic AI front desk. The owner's facts and Cal.com event types are in
@@ -41,7 +43,6 @@ uv run voice-agent dev fake-agent         # offline agent stand-in (DEV_AGENT_WS
 uv run voice-agent artifacts prune        # delete expired local captures/downloads (offline)
 uv run voice-agent export-env --for pipecat-cloud --file build/pipecat-cloud.env   # 0600 secret set file
 uv run python scripts/smoke_setup.py      # init/check/serve + fake-agent browser call, clean environment, real processes
-uv run python scripts/smoke_turn_relay.py # Docker: Railway-style container, audio only through a TURN relay
 python3 scripts/secret_scan.py            # run before every commit
 uvx ruff check src tests scripts          # lint
 ```
@@ -69,7 +70,7 @@ response settings; fields the provider adds by itself are ignored.
 | Call handling rules | `src/kapso_voice_agent/calls.py`, `outbound.py` | `pytest tests/test_http_surface.py tests/test_call_flow.py tests/test_outbound.py` |
 | Grok Voice protocol, model, voice | `src/kapso_voice_agent/grok_bridge.py`, `agent/agent.toml` `[grok]` | `pytest tests/test_grok_bridge.py` |
 | Pipecat Cloud entry, Kapso launch check | `src/kapso_voice_agent/cloud.py`, `examples/pipecat-cloud/` | `pytest tests/test_cloud_launch.py` |
-| TURN, hosting, guided setup | `turn.py`, `setup_wizard.py`, `.railway/railway.ts`, `examples/vps/` | `pytest tests/test_turn.py tests/test_setup_wizard.py`, `scripts/smoke_turn_relay.py` |
+| Hosting, guided setup | `setup_wizard.py`, `.railway/railway.ts`, `examples/vps/` | `pytest tests/test_setup_wizard.py`, then a real WhatsApp call (`docs/deploy.md`) |
 | Operator console | `src/kapso_voice_agent/static/`; state from `app.py` `/operator/api/state`, recent calls from `events.py` | `pytest tests/test_http_surface.py`; check it in a browser, light and dark, at 320 px |
 | Recording notice decision | `src/kapso_voice_agent/recording.py` | `pytest tests/test_privacy_and_retention.py` |
 | Private files, retention | `src/kapso_voice_agent/private.py` | `pytest tests/test_privacy_and_retention.py` |

@@ -18,11 +18,11 @@ def call_ref(call_id):
 
 # Why the voice provider last refused a session, for the operator console. A short code only;
 # never the provider's message, which can echo request details.
-PROVIDER_PROBLEMS = ("auth", "rate_limited", "not_found", "unreachable", "failed")
+PROVIDER_PROBLEMS = ("auth", "billing", "rate_limited", "not_found", "unreachable", "failed")
 # Events that mean a call did not go as planned. A failed tool result (for example slot_taken) is
 # a normal answer, not a problem with the call.
 CALL_PROBLEM = re.compile(r"^(provider_problem_|agent_session_not_ready|agent_(start|receive|audio_send)_failed_|call_failed_"
-                          r"|answer_timed_out|outbound_failed_|outbound_connect_outcome_unknown|reject_|inbound_rejected_busy)")
+                          r"|answer_timed_out|rtc_connect_timed_out|outbound_failed_|outbound_connect_outcome_unknown|reject_|inbound_rejected_busy)")
 
 
 class EventLog:

@@ -240,7 +240,6 @@ class TestOperatorSurface:
         assert (inbound["kind"], inbound["media"], inbound["tools"], inbound["problem"], inbound["active"]) == (
             "whatsapp_inbound", "relay", 1, False, False)
         assert state["voice"]["setup_step"] == "create_agent" and state["whatsapp_missing"] == ["KAPSO_API_KEY"]
-        assert state["call_audio"] == "direct"
 
     def test_outbound_is_off_unless_enabled_and_never_dials(self, settings, spec, store):
         async def go():

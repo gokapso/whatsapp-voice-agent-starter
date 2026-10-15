@@ -26,6 +26,7 @@ from pipecat.transports.smallwebrtc.connection import IceServer, SmallWebRTCConn
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.workers.runner import WorkerRunner
 from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosedOK
 
 from .business import WEEKDAYS
 from .capture import LocalCapture
@@ -34,6 +35,8 @@ from .tools import TOOLS, ToolRunner
 SAMPLE_RATE = 16000
 CHUNK_BYTES = 3200  # 100 ms of 16 kHz mono PCM16
 SIGNED_URL_API = "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url"
+# A call whose audio has not connected by then ends (AgentSession.end_if_media_never_connects).
+CONNECT_TIMEOUT_SECONDS = 30
 
 
 class ProviderRejected(Exception):
@@ -51,6 +54,8 @@ def provider_problem(error):
         status = getattr(getattr(error, "response", None), "status_code", None)  # websockets InvalidStatus
     if status in (401, 403):
         return "auth"
+    if status == 402:
+        return "billing"
     if status == 429:
         return "rate_limited"
     if status in (400, 404):
@@ -64,11 +69,13 @@ def provider_problem(error):
 
 def make_connection(ice_json):
     servers = [IceServer(**row) for row in json.loads(ice_json)]
-    return SmallWebRTCConnection(ice_servers=servers, connection_timeout_secs=30)
+    # Pipecat's own connect timeout cancels its peer-connection close halfway, and every later
+    # close then waits forever. AgentSession ends a call that never connects well before this.
+    return SmallWebRTCConnection(ice_servers=servers, connection_timeout_secs=CONNECT_TIMEOUT_SECONDS * 4)
 
 
 def media_path(connection):
-    """How the call's audio flows: "relay" (through TURN), "direct" (host or STUN-mapped address) or
+    """How the call's audio flows: "relay" (through a relay server), "direct" (host or STUN-mapped address) or
     "unknown". Reads aiortc's selected ICE pair; best effort, for the operator log only."""
     try:
         transceiver = connection.pc.getTransceivers()[0]
@@ -149,7 +156,8 @@ class ElevenAgentBridge(FrameProcessor):
                 try:
                     await self.websocket.send(json.dumps({"user_audio_chunk": base64.b64encode(chunk).decode()}))
                 except Exception as error:
-                    self.log.add("agent_audio_send_failed_" + type(error).__name__, self.ref)
+                    if not isinstance(error, ConnectionClosedOK):  # a clean close (end_call) is not a failure
+                        self.log.add("agent_audio_send_failed_" + type(error).__name__, self.ref)
                     await self.stop_socket()
                     await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
                     return
@@ -299,25 +307,41 @@ class AgentSession:
                                      enable_rtvi=False, idle_timeout_secs=None)
         self.runner = WorkerRunner(handle_sigint=False)
         self.task = None
+        self.media_connected = asyncio.Event()
+        self.connect_timeout = CONNECT_TIMEOUT_SECONDS
+        self.connect_watch = None
 
         @self.transport.event_handler("on_client_connected")
         async def connected(transport, client):
+            self.media_connected.set()
             log.add("rtc_connected", ref, media=media_path(connection))
             await self.bridge.media_ready()  # the greeting waits for connected media
 
         @self.transport.event_handler("on_client_disconnected")
         async def disconnected(transport, client):
             log.add("rtc_disconnected", ref)
-            await self.worker.cancel()
+            # The runner, not only the worker: a worker cancelled before media connected leaves
+            # runner.run() waiting, and the call would hold its slot until MAX_SESSION_SECONDS.
+            await self.runner.cancel()
 
     async def start(self):
         await self.runner.add_workers(self.worker)
         self.task = asyncio.create_task(self.runner.run())
+        self.connect_watch = asyncio.create_task(self.end_if_media_never_connects())
+
+    async def end_if_media_never_connects(self):
+        try:
+            await asyncio.wait_for(self.media_connected.wait(), timeout=self.connect_timeout)
+        except TimeoutError:
+            self.log.add("rtc_connect_timed_out", self.ref)
+            await self.runner.cancel()
 
     async def close(self):
         if self.closed:
             return
         self.closed = True
+        if self.connect_watch and not self.connect_watch.done():
+            self.connect_watch.cancel()
         await self.runner.cancel()
         if self.task and not self.task.done():
             try:

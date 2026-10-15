@@ -34,7 +34,6 @@ from .events import EventLog
 from .outbound import OutboundError
 from .private import private_dir, prune_local_artifacts
 from .recording import RecordingUnknown
-from .turn import TurnUnavailable
 
 STATIC = Path(__file__).parent / "static"
 MAX_WEBHOOK_BYTES = 1_000_000
@@ -204,11 +203,6 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
                 "offline_fake_agent": bool(settings.dev_agent_ws_url), "setup_step": setup_step,
                 "problem": log.provider_problem}
 
-    def call_audio():
-        if settings.turn_provider == "cloudflare":
-            return "cloudflare_turn"
-        return "ice_servers" if json.loads(settings.ice_servers_json) else "direct"
-
     @api.get("/state")
     async def state():
         calls = manager.snapshot()
@@ -218,7 +212,7 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
         return {"calls_ready": settings.calls_ready, "agent_ready": settings.agent_ready,
                 "agent_missing": settings.agent_missing(),  # setting names only, never values
                 "voice": voice_status(), "calendar": settings.calendar or None,
-                "whatsapp_missing": whatsapp_missing, "call_audio": call_audio(),
+                "whatsapp_missing": whatsapp_missing,
                 "outbound_enabled": settings.enable_outbound, "local_capture": settings.local_capture,
                 "recording": manager.recording.status(),
                 "max_concurrent_calls": settings.max_concurrent_calls, "busy": manager.busy(),
@@ -233,10 +227,6 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             ref, answer = await manager.start_browser_call(offer.sdp)
         except RecordingUnknown:
             raise HTTPException(503, "Could not read the agent's recording setting; no call started") from None
-        except TurnUnavailable:
-            log.add("turn_credentials_failed")
-            raise HTTPException(503, "Could not get TURN relay credentials; no call started. "
-                                     "Check CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN") from None
         except RuntimeError as error:
             if str(error) == "busy":
                 raise HTTPException(409, "Already at MAX_CONCURRENT_CALLS") from None
