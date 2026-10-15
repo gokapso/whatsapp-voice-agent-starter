@@ -27,6 +27,17 @@ Railway gives the server an HTTPS domain, a volume and a managed process. Railwa
 inbound UDP, but WhatsApp call audio still connects: the server finds its public address with a
 STUN server and sends its audio out to Meta's call servers.
 
+### The quickest way: the Railway template
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/whatsapp-voice-agent-kapso)
+
+It deploys `main` with Grok Voice and the local calendar. You fill in `XAI_API_KEY`,
+`KAPSO_API_KEY` and `WHATSAPP_PHONE_NUMBER_ID`; Railway generates `OPERATOR_TOKEN`,
+`CALLER_KEY_SECRET` and `WHATSAPP_WEBHOOK_SECRET`. At startup the server registers its webhook, so
+set up the number in Kapso ([below](#connect-the-number-in-kapso)) and go to
+[Check with a phone](#check-with-a-phone). The steps that follow deploy your own copy of the
+repository with the CLI, which you need for ElevenLabs or a changed agent.
+
 ### 1. Prepare the env file
 
 ```sh
@@ -88,10 +99,9 @@ with a public IP.
 - `.railway/railway.ts` describes the same project as code (one service, a 1 GB volume, the health
   check, one replica). `railway config plan` previews it. It keeps every secret with `preserve()`,
   so set the variables first.
-- There is no published one-click Railway template for this starter yet. To make your own,
-  deploy once, then use **Project settings > Generate template from project**
-  ([docs](https://docs.railway.com/guides/publish-and-share)). A template deploys from GitHub,
-  not from your local commits.
+- The template's marketplace overview is `.railway/template.md`. After you change it, run
+  `railway templates update whatsapp-voice-agent-kapso --readme-file .railway/template.md`. A
+  deploy from the template builds `main` once and does not redeploy by itself when `main` changes.
 
 ## Connect the number in Kapso
 

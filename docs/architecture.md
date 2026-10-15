@@ -94,7 +94,7 @@ is no webhook route, console or persistent `DATA_DIR`.
 | `agent/provider-tests/` | Opt-in ElevenLabs agent tests (LLM-judged, run by the operator) | `test_agent_config.py` (shape only) |
 | `scripts/smoke_setup.py`, `smoke_local.py` | Development smoke checks with real processes, offline | run by hand |
 | `examples/pipecat-cloud/` | `bot.py`, Dockerfile on Pipecat's base image, `pcc-deploy.toml` | `test_cloud_launch.py`; container check in its README |
-| `.railway/railway.ts`, `docker-entrypoint.sh`, `examples/vps/` | Railway project, root hand-off for volumes, VPS Compose + Caddy | `test_setup_wizard.py`, a real deploy |
+| `.railway/railway.ts`, `.railway/template.md`, `docker-entrypoint.sh`, `examples/vps/` | Railway project, Railway template overview, root hand-off for volumes, VPS Compose + Caddy | `test_setup_wizard.py`, a real deploy |
 
 ## Contracts
 
