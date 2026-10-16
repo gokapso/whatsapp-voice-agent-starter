@@ -65,6 +65,13 @@ class Settings:
     agent_config_path: Path = REPO_ROOT / "agent/agent.toml"
     allowed_hosts: tuple = ()
     dev_agent_ws_url: str = ""
+    # Experimental (handoff.py): an Inbox teammate can take over a live WhatsApp call. Off unless
+    # HUMAN_HANDOFF=1, and Kapso enables it per project separately.
+    human_handoff: bool = False
+    # ICE servers for the teammate's browser leg; defaults to ICE_SERVERS_JSON. A host that cannot
+    # receive inbound UDP (Railway) needs a TURN server here.
+    handoff_ice_servers_json: str = ""
+    handoff_max_seconds: int = 1800
     extra: dict = field(default_factory=dict)
 
     @property
@@ -96,6 +103,36 @@ class Settings:
             missing.append("CAL_API_KEY (or CALENDAR=local for offline development)")
         return missing
 
+    def handoff_problem(self):
+        """Why an Inbox teammate cannot take over calls here, or None when they can."""
+        if not self.human_handoff:
+            return "off"
+        if not (self.kapso_api_key and self.phone_number_id):
+            return "kapso_missing"
+        if self.local_capture:
+            return "local_capture"  # local capture records AI calls only
+        if self.public_domain and not any(url.startswith(("turn:", "turns:")) for url in self.handoff_ice_urls()):
+            return "turn_required"  # Railway receives no inbound UDP from browsers
+        return None
+
+    @property
+    def handoff_ready(self):
+        return self.handoff_problem() is None
+
+    def handoff_ice_json(self):
+        return self.handoff_ice_servers_json or self.ice_servers_json
+
+    def handoff_ice_urls(self):
+        urls = []
+        for server in json.loads(self.handoff_ice_json()):
+            value = server.get("urls")
+            urls.extend(value if isinstance(value, list) else [value])
+        return [url for url in urls if isinstance(url, str)]
+
+    def handoff_stun_urls(self):
+        """STUN URLs (never credentials) the teammate's browser uses to reach this server's media."""
+        return [url for url in self.handoff_ice_urls() if url.startswith("stun:")][:2]
+
     @property
     def operator_enabled(self):
         return len(self.operator_token) >= MIN_TOKEN_LENGTH
@@ -119,12 +156,14 @@ def load_settings(environ=None, env_file=None):
     get = lambda name, default="": values.get(name, default).strip()  # noqa: E731
 
     ice = get("ICE_SERVERS_JSON", "[]")
-    try:
-        servers = json.loads(ice)
-        if not isinstance(servers, list) or not all(isinstance(s, dict) and s.get("urls") for s in servers):
-            raise ValueError
-    except ValueError:
-        raise ConfigError('ICE_SERVERS_JSON must be a JSON list like [{"urls": "stun:stun.example:3478"}]') from None
+    handoff_ice = get("HANDOFF_ICE_SERVERS_JSON")
+    for name, value in (("ICE_SERVERS_JSON", ice), ("HANDOFF_ICE_SERVERS_JSON", handoff_ice or "[]")):
+        try:
+            servers = json.loads(value)
+            if not isinstance(servers, list) or not all(isinstance(s, dict) and s.get("urls") for s in servers):
+                raise ValueError
+        except ValueError:
+            raise ConfigError(f'{name} must be a JSON list like [{{"urls": "stun:stun.example:3478"}}]') from None
 
     dev_url = get("DEV_AGENT_WS_URL")
     if dev_url and urlparse(dev_url).hostname not in ("127.0.0.1", "localhost", "::1"):
@@ -172,6 +211,9 @@ def load_settings(environ=None, env_file=None):
         agent_config_path=agent_config if agent_config.is_absolute() else REPO_ROOT / agent_config,
         allowed_hosts=tuple(h.strip() for h in get("ALLOWED_HOSTS").split(",") if h.strip()),
         dev_agent_ws_url=dev_url,
+        human_handoff=_flag(get("HUMAN_HANDOFF", "0"), "HUMAN_HANDOFF"),
+        handoff_ice_servers_json=handoff_ice,
+        handoff_max_seconds=_int(get("HANDOFF_MAX_SECONDS", "1800"), "HANDOFF_MAX_SECONDS", 60, 14400),
     )
     with_port = [h for h in settings.allowed_hosts if not h.startswith("[") and ":" in h]
     if with_port:

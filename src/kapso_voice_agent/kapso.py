@@ -100,5 +100,36 @@ class KapsoClient:
                 "session": {"sdp_type": "offer", "sdp": offer_sdp}, "biz_opaque_callback_data": callback_data}
         return await self.request("POST", self.calls_path(), body)
 
+    # Experimental handoff signaling (handoff.py), on Kapso's Platform API with the same key.
+    # Returns (HTTP status, body) so the caller can act on Kapso's refusal code; only transport
+    # errors and non-JSON answers raise.
+
+    async def platform(self, method, path, body=None):
+        response = await self.client.request(method, self.base_url + "/platform/v1/whatsapp/call_handoffs" + path,
+                                             headers={"X-API-Key": self.key}, json=body)
+        try:
+            data = response.json()
+        except ValueError:
+            raise KapsoError(f"Kapso returned HTTP {response.status_code} without JSON", response.status_code) from None
+        if not isinstance(data, dict):
+            raise KapsoError("Kapso returned an unexpected JSON shape")
+        return response.status_code, data.get("data", data) if response.is_success else data
+
+    async def request_handoff(self, call_id, request_key, stun_urls):
+        return await self.platform("POST", "", {"phone_number_id": self.phone_number_id, "call_id": call_id,
+                                                "request_key": request_key, "stun_urls": stun_urls})
+
+    async def handoff(self, handoff_id):
+        return await self.platform("GET", "/" + quote(handoff_id, safe=""))
+
+    async def answer_handoff(self, handoff_id, sdp):
+        return await self.platform("POST", f"/{quote(handoff_id, safe='')}/answer", {"sdp": sdp})
+
+    async def commit_handoff(self, handoff_id):
+        return await self.platform("POST", f"/{quote(handoff_id, safe='')}/commit", {})
+
+    async def end_handoff(self, handoff_id, reason):
+        return await self.platform("POST", f"/{quote(handoff_id, safe='')}/end", {"reason": reason})
+
     async def close(self):
         await self.client.aclose()

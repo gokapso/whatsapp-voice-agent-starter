@@ -63,6 +63,46 @@ click. WhatsApp delivers it only inside the person's 24-hour customer service wi
 `131047` otherwise). The reply webhook (`call_permission_reply`) is not used: the console polls
 `call_permissions` until `start_call` is allowed.
 
+## Inbox handoff (experimental, `handoff.py`)
+
+Off unless `HUMAN_HANDOFF=1` here **and** Kapso has enrolled the project in its handoff rollout.
+Meta has no transfer action, and an answered call cannot renegotiate its SDP
+([Meta Calling FAQ](https://developers.facebook.com/documentation/business-messaging/whatsapp/calling/faq/)).
+So the Meta leg never changes. This server answers a second WebRTC peer for the teammate's
+browser and moves the caller's audio itself:
+
+```
+Meta leg in -> HandoffInput -> agent bridge -> HandoffOutput -> Meta leg out
+                    |                               ^
+                    v                               |
+            teammate leg out                teammate leg in
+```
+
+1. Grok Voice calls `transfer_to_human`, or the operator uses `POST /operator/api/calls/{ref}/handoff`
+   (both providers). The server sends `POST /platform/v1/whatsapp/call_handoffs` to Kapso with
+   `KAPSO_API_KEY`: the Meta call ID, a random request key (a retry returns the same request) and
+   the STUN URLs of `HANDOFF_ICE_SERVERS_JSON` (never TURN credentials). The AI keeps talking.
+2. A teammate selects **Join call** in Kapso Inbox. The browser asks for the microphone, then
+   sends its SDP offer with every candidate to Kapso. This server reads it on its 1-second poll
+   (`GET .../{id}`), answers it with a new peer and sends the answer (`POST .../{id}/answer`).
+3. When that peer is connected **and** the teammate's microphone audio arrives here, the server
+   asks Kapso to commit (`POST .../{id}/commit`). Only on Kapso's yes does it switch: caller
+   audio goes only to the teammate, queued AI audio is flushed, the AI provider socket closes,
+   teammate audio plays to the caller. The Meta call, its ID and its talk time do not change.
+4. After the switch, the call ends when Kapso reports the handoff ended (Hang up in Inbox, the
+   caller hanging up) or the teammate's leg closes; this server then sends `terminate`.
+   The AI does not come back after the switch. `HANDOFF_MAX_SECONDS` (default 1800) replaces
+   `MAX_SESSION_SECONDS` from the switch on.
+
+Before the switch, everything that goes wrong ends only the attempt and the AI keeps the caller:
+nobody joins in 60 s, a decline, the project's rollout turned off, no browser media within 25 s,
+Kapso refusing the commit. Grok then says a fixed line ("I couldn't reach a teammate right
+now..."). With ElevenLabs the stored agent has no transfer tool and is not told; only the operator
+command can start a handoff, and the AI continues silently after a failure.
+
+Not supported: outbound calls, browser test calls, Pipecat Cloud sessions, `LOCAL_CAPTURE=1`, and
+more than one server process. Kapso never calls this server for a handoff, so it needs no new route.
+
 ## Pipecat Cloud session (`cloud.py`, `examples/pipecat-cloud`)
 
 Kapso's dashboard Pipecat provider starts one Pipecat Cloud session per call, with the Meta
@@ -81,6 +121,7 @@ is no webhook route, console or persistent `DATA_DIR`.
 | `src/kapso_voice_agent/outbound.py` | Outbound call state machine | `test_outbound.py` |
 | `src/kapso_voice_agent/bridge.py` | Pipecat pipeline + ElevenLabs WebSocket protocol; picks the bridge for `VOICE_PROVIDER` | `test_call_flow.py` |
 | `src/kapso_voice_agent/grok_bridge.py` | xAI Grok Voice realtime protocol in the same pipeline slot | `test_grok_bridge.py` |
+| `src/kapso_voice_agent/handoff.py` | Experimental Inbox handoff: audio switch, teammate's leg, Kapso signaling | `test_handoff.py` |
 | `src/kapso_voice_agent/cloud.py` | Pipecat Cloud entry: Kapso launch body, Kapso lookup, then `CallManager` | `test_cloud_launch.py` |
 | `src/kapso_voice_agent/setup_wizard.py` | `voice-agent setup`, `export-env`, `railway variables` | `test_setup_wizard.py` |
 | `src/kapso_voice_agent/kapso.py` | Kapso call-action client | via flow tests |
@@ -121,6 +162,7 @@ Small, stable interfaces. Change them only together with their tests.
 | `POST /operator/api/outbound/permission` | bearer | `{"recipient": "<E.164 digits or US.…>"}` | `{"permission_status": no_permission\|temporary\|permanent, "can_call", "can_request"}` |
 | `POST /operator/api/outbound/permission-request` | bearer | `{"recipient"}` | the same fields and `"sent"`; nothing is sent when calls are already allowed; 429 when Meta allows no more requests; 502 with the reason when Meta refuses |
 | `POST /operator/api/outbound/call` | bearer | `{"recipient"}` (extra fields rejected) | `{"ref", "state": "ringing" \| "terminated"}` |
+| `POST /operator/api/calls/{ref}/handoff` | bearer | — | `{"ok", "status": "requested" \| "already_requested"}` or `{"ok": false, "code": "handoff_unavailable"}`; 409 when `handoff.problem` is set; 404 unknown ref. Experimental |
 
 `ref` is `call-<16 hex>` (SHA-256 prefix of the Meta call ID) or `browser-<16 hex>`. Raw Meta call
 IDs never leave the process except in Kapso API calls.
@@ -227,6 +269,11 @@ A failed Kapso call action (`call_failed_kapsoerror`, `reject_failed_kapsoerror`
 code passed through) and Kapso's `request_id`. `409` `answered_elsewhere` or `not_answerable`
 means Kapso keeps the call for another handler (the Inbox in hybrid mode, or a dashboard voice
 agent); the server then sends no reject, which Kapso would refuse too.
+`handoff_<event>` (experimental): `handoff_requested`, `handoff_request_refused code=<Kapso's>`,
+`handoff_joining`, `handoff_media_ready media=direct|relay`, `handoff_committed`,
+`handoff_fallback reason=<why the AI kept the call>`, `handoff_teammate_left reason=<hung_up|call_ended|human_disconnected>`.
+`/operator/api/state` has `handoff: {enabled, problem: null|off|kapso_missing|local_capture|turn_required}`
+and active calls a `handoff` state when the call could hand over.
 `kapso_webhook_<state>` (one per startup with `KAPSO_REGISTER_WEBHOOK=1`): the same states as
 `kapso_webhook` in `/operator/api/state`. `other` means another URL already receives the number's
 Meta events; it is left alone.

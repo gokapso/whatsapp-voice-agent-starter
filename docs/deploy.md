@@ -162,6 +162,22 @@ offline only.
 **Not supported:** serverless or HTTP-only platforms. A call needs a long-lived process and an
 audio path.
 
+## Inbox handoff (experimental)
+
+`HUMAN_HANDOFF=1` lets a Kapso Inbox teammate take over a call from the AI, once Kapso has
+enrolled your project. The teammate's browser sends its audio to **this server**, not to Meta, so
+the browser must reach the server over UDP:
+
+- Your computer or a server with a public IP: works with `ICE_SERVERS_JSON` (STUN) only.
+- Railway: it receives no inbound UDP. Put a TURN server in `HANDOFF_ICE_SERVERS_JSON`, for
+  example `[{"urls": ["stun:stun.example:3478", "turn:turn.example:3478?transport=udp"],
+  "username": "...", "credential": "..."}]`. Without a `turn:` URL the console shows
+  `handoff.problem = turn_required` and no handoff is requested. TURN credentials stay on the
+  server; the browser gets only the STUN URLs. This has not been tried on Railway yet.
+
+If the browser cannot reach the server, the join times out after about 25 seconds and the AI
+keeps the caller. Check `handoff_media_ready media=relay|direct` in the event log after a join.
+
 ## Other ways to run calls
 
 - **The provider's own WhatsApp integration.** ElevenLabs can answer WhatsApp calls itself, but
