@@ -598,3 +598,43 @@ def test_grok_agent_asks_for_a_teammate_with_its_tool_and_keeps_talking_when_nob
     assert handoffs.requests[0]["call_id"] == CALL_ID
     assert agent.notices == [HANDOFF_UNAVAILABLE_LINE]
     assert kapso.actions[:2] == ["pre_accept", "accept"] and "terminate" not in kapso.actions[:2]
+
+
+def test_turn_failure_keeps_the_ai_and_the_same_call(handoff_settings, spec, store, fast_handoff, monkeypatch):
+    from kapso_voice_agent.turn import handoff_ice
+
+    async def failed_credentials(settings):
+        return await handoff_ice(settings, httpx.MockTransport(lambda request: httpx.Response(503)))
+
+    monkeypatch.setattr(handoff_module, "handoff_ice", failed_credentials)
+
+    async def go():
+        handoffs = FakeHandoffs()
+        kapso = KapsoRecorder(handoffs)
+        settings = replace(handoff_settings, cloudflare_turn_key_id="test-turn-key",
+                           cloudflare_turn_api_token="test-turn-token")
+        async with ToneAgent() as agent:
+            app = create_app(settings, spec, store, session_factory=agent.factory(), kapso_factory=kapso.factory())
+            caller = RTCPeerConnection()
+            ear = Ear(caller)
+            try:
+                await start_call(app, kapso, caller)
+                await ear.wait_for(AGENT_HZ)
+                session = app.state.manager.sessions[CALL_ID]
+                assert (await session.handoff.request())["ok"]
+                handoffs.row.update(state="joining", offer="unused because TURN fails first")
+                await wait_for_event(app.state.log, "handoff_fallback", timeout=10)
+                await ear.wait_for(AGENT_HZ, since=asyncio.get_running_loop().time())
+                assert not agent.closed.is_set()
+                assert not session.handoff.switch.human
+                assert kapso.actions == ["pre_accept", "accept"]
+                assert handoffs.row["end_reason"] == "bridge_failed"
+                assert "test-turn-token" not in json.dumps(list(app.state.log.events))
+                async with asgi_client(app) as client:
+                    state = await client.get("/operator/api/state", headers={"Authorization": "Bearer " + settings.operator_token})
+                    assert "test-turn-token" not in state.text
+            finally:
+                await app.state.manager.shutdown()
+                await caller.close()
+                await ear.close()
+    run(go)

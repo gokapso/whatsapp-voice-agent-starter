@@ -169,11 +169,21 @@ enrolled your project. The teammate's browser sends its audio to **this server**
 the browser must reach the server over UDP:
 
 - Your computer or a server with a public IP: works with `ICE_SERVERS_JSON` (STUN) only.
-- Railway: it receives no inbound UDP. Put a TURN server in `HANDOFF_ICE_SERVERS_JSON`, for
-  example `[{"urls": ["stun:stun.example:3478", "turn:turn.example:3478?transport=udp"],
-  "username": "...", "credential": "..."}]`. Without a `turn:` URL the console shows
-  `handoff.problem = turn_required` and no handoff is requested. TURN credentials stay on the
-  server; the browser gets only the STUN URLs. This has not been tried on Railway yet.
+- Railway: it receives no inbound UDP, so the handoff needs TURN. In Cloudflare Realtime,
+  create a TURN key and set `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` on this
+  server. Each join generates fresh credentials, valid for `HANDOFF_MAX_SECONDS` plus five
+  minutes; restarting to renew credentials is unnecessary. The key and credentials stay on the
+  server. Kapso and the browser receive only STUN URLs. A failed credential request abandons
+  that join and the AI keeps the caller.
+- For another TURN provider, set `HANDOFF_ICE_SERVERS_JSON`, for example
+  `[{"urls": ["stun:stun.example:3478", "turn:turn.example:3478?transport=udp"],
+  "username": "...", "credential": "..."}]`. Keep those credentials valid for the full call.
+  Cloudflare takes precedence when both Cloudflare settings are present. Without TURN on
+  Railway, the console shows `handoff.problem = turn_required`; a missing Cloudflare setting
+  shows `cloudflare_turn_missing`. Neither allows a handoff request.
+
+Cloudflare setup: [generate credentials](https://developers.cloudflare.com/realtime/turn/generate-credentials/).
+This is configured readiness; a real Railway-to-Inbox audio handoff still needs a live test.
 
 If the browser cannot reach the server, the join times out after about 25 seconds and the AI
 keeps the caller. Check `handoff_media_ready media=relay|direct` in the event log after a join.

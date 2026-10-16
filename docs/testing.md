@@ -145,7 +145,8 @@ real phone and costs money. Get permission for each call.
 
 Inbox handoff (experimental; a Kapso admin enrolls the project first; get permission for each call):
 
-1. `HUMAN_HANDOFF=1`, and a TURN server in `HANDOFF_ICE_SERVERS_JSON` if the server is on Railway.
+1. `HUMAN_HANDOFF=1`, and either both Cloudflare TURN settings or a TURN server in
+   `HANDOFF_ICE_SERVERS_JSON` if the server is on Railway.
    `/operator/api/state` shows `handoff.problem: null`.
 2. Call the number, ask Riley (Grok Voice) for a person. Check `handoff_requested` and that the
    Inbox conversation shows **The AI agent asked for a teammate**. Riley keeps talking.

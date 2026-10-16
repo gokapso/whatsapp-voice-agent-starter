@@ -72,6 +72,8 @@ class Settings:
     # receive inbound UDP (Railway) needs a TURN server here.
     handoff_ice_servers_json: str = ""
     handoff_max_seconds: int = 1800
+    cloudflare_turn_key_id: str = ""
+    cloudflare_turn_api_token: str = field(default="", repr=False)
     extra: dict = field(default_factory=dict)
 
     @property
@@ -111,13 +113,20 @@ class Settings:
             return "kapso_missing"
         if self.local_capture:
             return "local_capture"  # local capture records AI calls only
-        if self.public_domain and not any(url.startswith(("turn:", "turns:")) for url in self.handoff_ice_urls()):
+        if bool(self.cloudflare_turn_key_id) != bool(self.cloudflare_turn_api_token):
+            return "cloudflare_turn_missing"
+        if self.public_domain and not self.cloudflare_turn_ready and not any(
+                url.startswith(("turn:", "turns:")) for url in self.handoff_ice_urls()):
             return "turn_required"  # Railway receives no inbound UDP from browsers
         return None
 
     @property
     def handoff_ready(self):
         return self.handoff_problem() is None
+
+    @property
+    def cloudflare_turn_ready(self):
+        return bool(self.cloudflare_turn_key_id and self.cloudflare_turn_api_token)
 
     def handoff_ice_json(self):
         return self.handoff_ice_servers_json or self.ice_servers_json
@@ -131,7 +140,8 @@ class Settings:
 
     def handoff_stun_urls(self):
         """STUN URLs (never credentials) the teammate's browser uses to reach this server's media."""
-        return [url for url in self.handoff_ice_urls() if url.startswith("stun:")][:2]
+        urls = [url for url in self.handoff_ice_urls() if url.startswith("stun:")][:2]
+        return urls or (["stun:stun.cloudflare.com:3478"] if self.cloudflare_turn_ready else [])
 
     @property
     def operator_enabled(self):
@@ -213,6 +223,8 @@ def load_settings(environ=None, env_file=None):
         dev_agent_ws_url=dev_url,
         human_handoff=_flag(get("HUMAN_HANDOFF", "0"), "HUMAN_HANDOFF"),
         handoff_ice_servers_json=handoff_ice,
+        cloudflare_turn_key_id=get("CLOUDFLARE_TURN_KEY_ID"),
+        cloudflare_turn_api_token=get("CLOUDFLARE_TURN_API_TOKEN"),
         handoff_max_seconds=_int(get("HANDOFF_MAX_SECONDS", "1800"), "HANDOFF_MAX_SECONDS", 60, 14400),
     )
     with_port = [h for h in settings.allowed_hosts if not h.startswith("[") and ":" in h]

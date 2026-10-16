@@ -31,6 +31,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.smallwebrtc.transport import RawAudioTrack
 
 from .bridge import media_path
+from .turn import handoff_ice
 
 SAMPLE_RATE = 16000
 CHUNK_10MS = SAMPLE_RATE // 100 * 2
@@ -249,8 +250,9 @@ class CallHandoff:
 
         self.state = "joining"
         self.log.add("handoff_joining", self.ref)
-        self.leg = TeammateLeg(self.connection_factory(self.settings.handoff_ice_json()))
         try:
+            ice_json = await handoff_ice(self.settings)
+            self.leg = TeammateLeg(self.connection_factory(ice_json))
             answer = await asyncio.wait_for(self.leg.answer(data["offer_sdp"]), ANSWER_SECONDS)
         except Exception:  # noqa: BLE001 - an unusable offer or ICE setup failure
             return await self.give_up(client, "bridge_failed")
