@@ -151,8 +151,8 @@ Inbox handoff (experimental; a Kapso admin enrolls the project first; get permis
    Inbox conversation shows **The AI agent asked for a teammate**. Riley keeps talking.
 3. Select **Decline transfer**: `handoff_fallback reason=declined`, and Riley says it could not
    reach a teammate. Ask again and let the request lapse (60 s): `reason=expired`.
-4. Ask again and select **Join call** with a headset. Check `handoff_media_ready`, then
-   `handoff_committed`; on the phone, Riley stops and you hear the teammate both ways. The
+4. Ask again and select **Join call** with a headset. Check `handoff_media_ready` and
+   `handoff_browser_ready`, then `handoff_committed`; on the phone, Riley stops and you hear the teammate both ways. The
    Inbox timer keeps the call's talk time.
 5. Mute, then Hang up in Inbox: the phone call ends, `handoff_teammate_left reason=hung_up`,
    `terminate_ok`. Repeat and hang up on the phone instead: `reason=call_ended`.

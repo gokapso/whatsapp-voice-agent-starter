@@ -10,8 +10,10 @@ the caller's audio itself:
                 teammate leg out                 teammate leg in
 
 Signaling goes through Kapso's Platform API with KAPSO_API_KEY; Kapso never calls this server.
-request -> poll for the browser's SDP offer -> answer -> wait until the teammate's audio arrives
--> commit at Kapso -> switch. Until the commit the AI keeps the caller, and any failure (nobody
+request -> poll for the browser's SDP offer -> answer -> wait until the teammate's browser reports
+ready (it plays this leg's audio and sends its microphone) AND this leg's media arrives here ->
+commit at Kapso -> switch. Received packets alone are not readiness: a muted browser track still
+sends silence. Speech is never required. Until the commit the AI keeps the caller, and any failure (nobody
 joins, a decline, no media, Kapso refuses) ends only the attempt. After the commit the AI provider
 session is closed and does not come back: when the teammate's leg ends, the call ends.
 
@@ -228,9 +230,12 @@ class CallHandoff:
             await self.follow(client)
         except asyncio.CancelledError:
             raise
-        except Exception as error:  # noqa: BLE001 - an unexpected failure must not end the call
+        except Exception as error:  # noqa: BLE001 - before the switch, a failure must not end the call
             self.log.add("handoff_failed_" + type(error).__name__, self.ref)
-            if self.state != "committed":
+            if self.state == "committed":
+                # The AI is gone and nothing watches the teammate's leg: end the call, not silence.
+                await self.leave_teammate(client, "bridge_failed")
+            else:
                 await self.give_up(client, "bridge_failed")
         finally:
             await client.close()
@@ -253,7 +258,7 @@ class CallHandoff:
         if status != 200:
             return await self.fall_back(data.get("end_reason") or data.get("error", "refused"))
 
-        if not await self.wait_for_teammate_audio(client):
+        if not await self.wait_until_ready(client):
             return
         if not await self.commit(client):
             return
@@ -288,26 +293,33 @@ class CallHandoff:
             return None
         return data
 
-    async def wait_for_teammate_audio(self, client):
-        """Ready means the browser's media is connected and its microphone audio is arriving here."""
+    async def wait_until_ready(self, client):
+        """Both, in any order: this leg's media arrives here (any RTP, silence included), and the
+        browser reported through Kapso that it plays this leg's audio with its microphone on."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.join_seconds
-        while not self.leg.heard.is_set():
+        browser_ready = media_logged = False
+        while True:
+            if self.leg.heard.is_set() and not media_logged:
+                media_logged = True
+                self.log.add("handoff_media_ready", self.ref, media=media_path(self.leg.connection))
+            if browser_ready and self.leg.heard.is_set():
+                return True
             if self.leg.ended.is_set():
                 await self.give_up(client, "bridge_failed")
                 return False
             if loop.time() >= deadline:
                 await self.give_up(client, "join_timeout")
                 return False
-            try:
-                await asyncio.wait_for(self.leg.heard.wait(), self.poll_seconds)
-            except TimeoutError:
-                data = await self.read(client)
-                if data and data["state"] == "ended":
-                    await self.fall_back(data.get("end_reason") or "ended")
-                    return False
-        self.log.add("handoff_media_ready", self.ref, media=media_path(self.leg.connection))
-        return True
+            data = await self.read(client)
+            if data and data["state"] == "ended":
+                await self.fall_back(data.get("end_reason") or "ended")
+                return False
+            if not browser_ready and data and data.get("browser_ready") is True:
+                browser_ready = True
+                self.log.add("handoff_browser_ready", self.ref)
+                continue
+            await asyncio.sleep(self.poll_seconds)
 
     async def commit(self, client):
         """Kapso decides whether the teammate still has the call; only then does audio move."""
@@ -329,15 +341,20 @@ class CallHandoff:
 
     async def take_over(self):
         """The switch: caller audio to the teammate only, queued AI audio flushed, provider closed.
-        The Meta leg, its call ID and its talk time are untouched."""
+        The Meta leg, its call ID and its talk time are untouched. The routing changes first, so a
+        failed flush or provider close cannot leave the caller with silence or with the AI."""
         self.switch.leg = self.leg
         self.switch.human = True
+        self.leg.sink = self.switch.output.play
         self.state = "committed"
         self.committed_at = asyncio.get_running_loop().time()
-        await self.switch.output.broadcast_interruption()
-        await self.session.bridge.stop_socket()
-        self.leg.sink = self.switch.output.play
         self.log.add("handoff_committed", self.ref)
+        for step, action in (("flush", self.switch.output.broadcast_interruption),
+                             ("ai_close", self.session.bridge.stop_socket)):
+            try:
+                await action()
+            except Exception as error:  # noqa: BLE001 - the switch above already silences the AI both ways
+                self.log.add(f"handoff_{step}_failed_" + type(error).__name__, self.ref)
 
     async def stay_with_teammate(self, client):
         """Until the teammate's leg ends or Kapso reports the handoff ended (Hang up, call end).
@@ -351,12 +368,17 @@ class CallHandoff:
                 data = await self.read(client)
                 if data and data["state"] == "ended":
                     reason = data.get("end_reason") or "ended"
-        self.log.add("handoff_teammate_left", self.ref, reason=reason)
-        if reason == "human_disconnected":
-            await self.report_end(client, "human_disconnected")
+        await self.leave_teammate(client, reason)
+
+    async def leave_teammate(self, client, reason):
+        """After the switch the AI does not come back: the session ends and the call manager sends
+        terminate. Reasons that Kapso did not report itself are reported here."""
+        self.log.add("handoff_teammate_left", self.ref, reason=str(reason)[:40])
+        if reason in ("human_disconnected", "bridge_failed"):
+            await self.report_end(client, reason)
         self.state = "ended"
         await self.leg.close()
-        await self.session.runner.cancel()  # the session ends; the call manager sends terminate
+        await self.session.runner.cancel()
 
     async def leg_end_reason(self, client):
         """The teammate's leg closed. A Hang up in Inbox closes it too, and its request may land at

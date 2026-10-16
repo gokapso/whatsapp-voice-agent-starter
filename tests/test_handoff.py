@@ -152,13 +152,17 @@ class FakeHandoffs:
             if self.refuse_request:
                 return httpx.Response(403, json={"error": "handoff_unavailable"})
             row = self.rows.setdefault(body["request_key"], {"id": "handoff-1", "state": "requested",
-                                                             "end_reason": None, "offer": None, "answer": None})
+                                                             "end_reason": None, "offer": None, "answer": None,
+                                                             "browser_ready": False})
             return self.render(row, 201)
         row = next(r for r in self.rows.values() if r["id"] == parts[0])
         action = parts[1] if len(parts) > 1 else None
         if action == "answer" and row["state"] == "joining":
             row["answer"] = body["sdp"]
         elif action == "commit":
+            if row["state"] == "joining" and not row["browser_ready"]:
+                return httpx.Response(409, json={"error": "browser_not_ready", "state": row["state"],
+                                                 "end_reason": None})
             if row["state"] != "joining" or not row["answer"]:
                 return httpx.Response(409, json={"error": "handoff_ended", "state": row["state"],
                                                  "end_reason": row["end_reason"]})
@@ -171,7 +175,8 @@ class FakeHandoffs:
     def render(self, row, status=200):
         offer = row["offer"] if row["state"] == "joining" and not row["answer"] else None
         return httpx.Response(status, json={"data": {"id": row["id"], "state": row["state"],
-                                                     "end_reason": row["end_reason"], "offer_sdp": offer}})
+                                                     "end_reason": row["end_reason"], "offer_sdp": offer,
+                                                     "browser_ready": row["browser_ready"]}})
 
     @property
     def row(self):
@@ -208,13 +213,24 @@ async def start_call(app, kapso, caller):
     return job
 
 
-async def teammate_joins(handoffs, teammate):
-    """The browser: offer with every candidate, Kapso stores it, then the server's answer applies."""
-    teammate.addTrack(Tone(TEAMMATE_HZ))
+async def teammate_joins(handoffs, teammate, hz=TEAMMATE_HZ, ready=True):
+    """The browser: offer with every candidate, Kapso stores it, then the server's answer applies.
+    Once connected and playing, the browser reports ready to Kapso (`ready`)."""
+    teammate.addTrack(Tone(hz))
     await teammate.setLocalDescription(await teammate.createOffer())
     handoffs.row.update(state="joining", offer=teammate.localDescription.sdp)
     answer = await handoffs.wait_answer()
     await teammate.setRemoteDescription(RTCSessionDescription(answer, "answer"))
+    if ready:
+        await browser_ready(handoffs, teammate)
+
+
+async def browser_ready(handoffs, teammate):
+    async def connected():
+        while teammate.connectionState != "connected":
+            await asyncio.sleep(0.02)
+    await asyncio.wait_for(connected(), 10)
+    handoffs.row["browser_ready"] = True
 
 
 def run(go):
@@ -284,7 +300,122 @@ def test_teammate_takes_over_the_same_call_and_the_ai_stops_both_ways(handoff_se
     assert "handoff_media_ready" in events and "v=0" not in events and CALL_ID not in events
 
 
-@pytest.mark.parametrize("ending", ["declined", "no_media"])
+def test_silent_media_without_the_browser_ready_report_never_switches(handoff_settings, spec, store, fast_handoff):
+    """A muted browser track sends valid silent RTP. Only the browser's ready report (after its
+    audio plays) lets the switch happen, and then a silent teammate is enough."""
+    async def go():
+        handoffs = FakeHandoffs()
+        kapso = KapsoRecorder(handoffs)
+        async with ToneAgent() as agent:
+            app = create_app(handoff_settings, spec, store, session_factory=agent.factory(),
+                             kapso_factory=kapso.factory())
+            caller, teammate = RTCPeerConnection(), RTCPeerConnection()
+            caller_ear = Ear(caller)
+            try:
+                await start_call(app, kapso, caller)
+                await caller_ear.wait_for(AGENT_HZ)
+                session = app.state.manager.sessions[CALL_ID]
+                await session.handoff.request()
+                await teammate_joins(handoffs, teammate, hz=0, ready=False)
+                await wait_for_event(app.state.log, "handoff_media_ready", timeout=10)
+                await asyncio.sleep(0.5)
+                loop = asyncio.get_running_loop()
+                before = {"state": handoffs.row["state"], "agent_closed": agent.closed.is_set(),
+                          "switch": session.handoff.switch.human,
+                          "caller_hears_agent": caller_ear.count(AGENT_HZ, since=loop.time() - 0.4)}
+                await browser_ready(handoffs, teammate)
+                await wait_for_event(app.state.log, "handoff_committed", timeout=10)
+                await asyncio.wait_for(agent.closed.wait(), 5)
+                after = {"state": handoffs.row["state"], "switch": session.handoff.switch.human}
+            finally:
+                await app.state.manager.shutdown()
+                await caller.close()
+                await teammate.close()
+                await caller_ear.close()
+        return before, after
+    before, after = run(go)
+    assert before == {"state": "joining", "agent_closed": False, "switch": False,
+                      "caller_hears_agent": before["caller_hears_agent"]}
+    assert before["caller_hears_agent"] > 5
+    assert after == {"state": "committed", "switch": True}
+
+
+def test_a_failed_ai_close_at_the_switch_still_connects_the_teammate(
+        handoff_settings, spec, store, fast_handoff, monkeypatch):
+    async def go():
+        handoffs = FakeHandoffs()
+        kapso = KapsoRecorder(handoffs)
+        async with ToneAgent() as agent:
+            app = create_app(handoff_settings, spec, store, session_factory=agent.factory(),
+                             kapso_factory=kapso.factory())
+            caller, teammate = RTCPeerConnection(), RTCPeerConnection()
+            caller_ear = Ear(caller)
+            manager = app.state.manager
+            try:
+                job = await start_call(app, kapso, caller)
+                await caller_ear.wait_for(AGENT_HZ)
+                session = manager.sessions[CALL_ID]
+                close_socket, failures = session.bridge.stop_socket, []
+
+                async def failing_once():
+                    if not failures:
+                        failures.append(1)
+                        raise RuntimeError("provider close failed")
+                    await close_socket()
+                monkeypatch.setattr(session.bridge, "stop_socket", failing_once)
+                await session.handoff.request()
+                await teammate_joins(handoffs, teammate)
+                await wait_for_event(app.state.log, "handoff_committed", timeout=10)
+                switched = asyncio.get_running_loop().time()
+                await caller_ear.wait_for(TEAMMATE_HZ, since=switched)
+                await asyncio.sleep(0.5)
+                agent_after = caller_ear.count(AGENT_HZ, since=switched + 0.3)
+                handoffs.end(handoffs.row, "hung_up")
+                await asyncio.wait_for(job, timeout=10)
+            finally:
+                await manager.shutdown()
+                await caller.close()
+                await teammate.close()
+                await caller_ear.close()
+        return agent_after, kapso, app
+    agent_after, kapso, app = run(go)
+    assert agent_after == 0, "AI audio reached the caller after the switch"
+    assert any(e["event"] == "handoff_ai_close_failed_runtimeerror" for e in app.state.log.events)
+    assert kapso.actions == ["pre_accept", "accept", "terminate"]
+
+
+def test_an_unexpected_failure_after_the_switch_ends_the_call(handoff_settings, spec, store, fast_handoff,
+                                                              monkeypatch):
+    async def broken(_self, _client):
+        raise RuntimeError("watcher failed")
+    monkeypatch.setattr(handoff_module.CallHandoff, "stay_with_teammate", broken)
+
+    async def go():
+        handoffs = FakeHandoffs()
+        kapso = KapsoRecorder(handoffs)
+        async with ToneAgent() as agent:
+            app = create_app(handoff_settings, spec, store, session_factory=agent.factory(),
+                             kapso_factory=kapso.factory())
+            caller, teammate = RTCPeerConnection(), RTCPeerConnection()
+            caller_ear = Ear(caller)
+            try:
+                job = await start_call(app, kapso, caller)
+                await caller_ear.wait_for(AGENT_HZ)
+                await app.state.manager.sessions[CALL_ID].handoff.request()
+                await teammate_joins(handoffs, teammate)
+                await asyncio.wait_for(job, timeout=10)
+            finally:
+                await app.state.manager.shutdown()
+                await caller.close()
+                await teammate.close()
+                await caller_ear.close()
+        return kapso, handoffs
+    kapso, handoffs = run(go)
+    assert handoffs.ends == ["bridge_failed"]
+    assert kapso.actions == ["pre_accept", "accept", "terminate"]
+
+
+@pytest.mark.parametrize("ending", ["declined", "no_media", "ready_without_media"])
 def test_the_ai_keeps_the_caller_when_nobody_takes_over(handoff_settings, spec, store, fast_handoff, ending):
     async def go():
         handoffs = FakeHandoffs()
@@ -302,6 +433,11 @@ def test_the_ai_keeps_the_caller_when_nobody_takes_over(handoff_settings, spec, 
                 assert (await session.handoff.request())["ok"] is True
                 if ending == "declined":
                     handoffs.end(handoffs.row, "declined")
+                elif ending == "ready_without_media":
+                    # A ready report is not enough: this leg's media must arrive here too.
+                    await teammate.setLocalDescription(await teammate.createOffer())
+                    handoffs.row.update(state="joining", offer=teammate.localDescription.sdp,
+                                        browser_ready=True)
                 else:
                     # The browser's offer arrives, but its media never connects.
                     await teammate.setLocalDescription(await teammate.createOffer())

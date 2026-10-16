@@ -85,17 +85,23 @@ Meta leg in -> HandoffInput -> agent bridge -> HandoffOutput -> Meta leg out
 2. A teammate selects **Join call** in Kapso Inbox. The browser asks for the microphone, then
    sends its SDP offer with every candidate to Kapso. This server reads it on its 1-second poll
    (`GET .../{id}`), answers it with a new peer and sends the answer (`POST .../{id}/answer`).
-3. When that peer is connected **and** the teammate's microphone audio arrives here, the server
-   asks Kapso to commit (`POST .../{id}/commit`). Only on Kapso's yes does it switch: caller
-   audio goes only to the teammate, queued AI audio is flushed, the AI provider socket closes,
-   teammate audio plays to the caller. The Meta call, its ID and its talk time do not change.
+3. The browser plays this peer's audio, turns its microphone on and reports **ready** to Kapso
+   (the poll returns `browser_ready: true`). When that report is in **and** this peer's media
+   arrives here (any RTP, silence included: speech is never required), the server asks Kapso to
+   commit (`POST .../{id}/commit`). Packets alone are not enough, because a muted browser track
+   sends silence before its audio plays. Only on Kapso's yes does it switch: caller audio goes
+   only to the teammate, teammate audio plays to the caller, then queued AI audio is flushed and
+   the AI provider socket closes. If the flush or the close fails, the switch stays (the AI is
+   already cut off both ways). The Meta call, its ID and its talk time do not change.
 4. After the switch, the call ends when Kapso reports the handoff ended (Hang up in Inbox, the
    caller hanging up) or the teammate's leg closes; this server then sends `terminate`.
    The AI does not come back after the switch. `HANDOFF_MAX_SECONDS` (default 1800) replaces
-   `MAX_SESSION_SECONDS` from the switch on.
+   `MAX_SESSION_SECONDS` from the switch on. An unexpected failure after the switch ends the call
+   (reported as `bridge_failed`) instead of leaving the caller with silence.
 
 Before the switch, everything that goes wrong ends only the attempt and the AI keeps the caller:
-nobody joins in 60 s, a decline, the project's rollout turned off, no browser media within 25 s,
+nobody joins in 60 s, a decline, the project's rollout turned off, no ready report or no browser
+media within 25 s, the browser unable to play the call's audio,
 Kapso refusing the commit. Grok then says a fixed line ("I couldn't reach a teammate right
 now..."). With ElevenLabs the stored agent has no transfer tool and is not told; only the operator
 command can start a handoff, and the AI continues silently after a failure.
@@ -270,7 +276,8 @@ code passed through) and Kapso's `request_id`. `409` `answered_elsewhere` or `no
 means Kapso keeps the call for another handler (the Inbox in hybrid mode, or a dashboard voice
 agent); the server then sends no reject, which Kapso would refuse too.
 `handoff_<event>` (experimental): `handoff_requested`, `handoff_request_refused code=<Kapso's>`,
-`handoff_joining`, `handoff_media_ready media=direct|relay`, `handoff_committed`,
+`handoff_joining`, `handoff_media_ready media=direct|relay`, `handoff_browser_ready`, `handoff_committed`,
+`handoff_flush_failed_<error>`, `handoff_ai_close_failed_<error>`,
 `handoff_fallback reason=<why the AI kept the call>`, `handoff_teammate_left reason=<hung_up|call_ended|human_disconnected>`.
 `/operator/api/state` has `handoff: {enabled, problem: null|off|kapso_missing|local_capture|turn_required}`
 and active calls a `handoff` state when the call could hand over.
