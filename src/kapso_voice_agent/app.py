@@ -15,6 +15,7 @@ Operator (bearer OPERATOR_TOKEN; returns 404 when the token is unset):
   POST /operator/api/outbound/permission  {recipient}: may this server call the person?
   POST /operator/api/outbound/permission-request  {recipient}: ask the person to allow calls
   POST /operator/api/outbound/call        {recipient}: call a person who allowed calls
+  POST /operator/api/calls/{ref}/handoff  experimental: ask an Inbox teammate to take over (HUMAN_HANDOFF=1)
 """
 
 import asyncio
@@ -242,6 +243,7 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
                 "local_capture": settings.local_capture,
                 "recording": manager.recording.status(),
                 "max_concurrent_calls": settings.max_concurrent_calls, "busy": manager.busy(),
+                "handoff": {"enabled": settings.human_handoff, "problem": settings.handoff_problem()},
                 "calls": calls, "recent_calls": log.recent_calls({call["ref"] for call in calls}),
                 "events": list(log.events), "native_artifact_events": list(manager.artifacts)}
 
@@ -268,6 +270,17 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
         if not await manager.hang_up(ref):
             raise HTTPException(404, "No active call with that reference")
         return {"ended": True}
+
+    @api.post("/calls/{ref}/handoff")
+    async def handoff(ref: str):
+        if not re.fullmatch(r"call-[0-9a-f]{16}", ref):
+            raise HTTPException(422, "Invalid call reference")
+        if not settings.handoff_ready:
+            raise HTTPException(409, "Handoff is not available: " + settings.handoff_problem())
+        result = await manager.request_handoff(ref)
+        if result is None:
+            raise HTTPException(404, "No active WhatsApp call with that reference")
+        return result
 
     @api.post("/outbound/permission")
     async def permission(body: Recipient):

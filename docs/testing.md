@@ -60,6 +60,17 @@ uv run python scripts/smoke_setup.py      # init, check and serve in a clean env
 uv run python scripts/smoke_local.py      # health, webhook signature, console access, stand-in call
 ```
 
+### Inbox handoff (experimental)
+
+`tests/test_handoff.py` uses three local peers with their own tones (caller 440 Hz, AI 1000 Hz,
+teammate 700 Hz) and checks what each one hears before and after the switch, the fallbacks and the
+end of the call. Kapso's handoff API is an in-memory state machine there.
+
+`scripts/handoff_local_demo.py` runs the same server against a Kapso app on your computer, with a
+local caller, a fake Grok agent that asks for a teammate after 4 seconds, and Meta's call actions
+answered in the script. Join from that app's Inbox with a microphone (or a browser with a fake
+700 Hz microphone); the script prints which tone the caller hears each second.
+
 ## Level 2: browser call
 
 Use a separate env file and data directory, so the test agent and its bookings stay apart from
@@ -131,6 +142,23 @@ real phone and costs money. Get permission for each call.
    end, `terminate_ok` when Riley hung up, or `call_terminated` when you did. Neither call shows
    **Problem** under Recent calls. `call_failed_kapsoerror code=answered_elsewhere` means Kapso
    kept the call for the Inbox: set the number to Agent or integration in Kapso.
+
+Inbox handoff (experimental; a Kapso admin enrolls the project first; get permission for each call):
+
+1. `HUMAN_HANDOFF=1`, and either both Cloudflare TURN settings or a TURN server in
+   `HANDOFF_ICE_SERVERS_JSON` if the server is on Railway.
+   `/operator/api/state` shows `handoff.problem: null`.
+2. Call the number, ask Riley (Grok Voice) for a person. Check `handoff_requested` and that the
+   Inbox conversation shows **The AI agent asked for a teammate**. Riley keeps talking.
+3. Select **Decline transfer**: `handoff_fallback reason=declined`, and Riley says it could not
+   reach a teammate. Ask again and let the request lapse (60 s): `reason=expired`.
+4. Ask again and select **Join call** with a headset. Check `handoff_media_ready` and
+   `handoff_browser_ready`, then `handoff_committed`; on the phone, Riley stops and you hear the teammate both ways. The
+   Inbox timer keeps the call's talk time.
+5. Mute, then Hang up in Inbox: the phone call ends, `handoff_teammate_left reason=hung_up`,
+   `terminate_ok`. Repeat and hang up on the phone instead: `reason=call_ended`.
+6. Repeat once with the teammate's network blocked (for example a VPN that drops UDP): the join
+   fails after about 25 s and Riley keeps the caller.
 
 Outbound calls (only with the person's consent): send the phone a
 WhatsApp message, then select **Ask to allow calls** in the console. Check that the phone gets the

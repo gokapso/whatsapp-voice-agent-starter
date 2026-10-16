@@ -127,6 +127,7 @@ class ElevenAgentBridge(FrameProcessor):
         self.url = None                  # signed URL, fetched when the pipeline starts
         self.media_connected = False     # set by the session when WebRTC connects
         self.opening = False
+        self.handoff = None              # handoff.CallHandoff when a teammate may take over
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
@@ -284,7 +285,7 @@ class AgentSession:
     """One call: WebRTC transport + agent bridge (+ optional capture), run by a Pipecat worker."""
 
     def __init__(self, connection, settings, spec, store, caller, log, ref, direction="inbound", *, recording,
-                 url_factory=None):
+                 url_factory=None, handoff=None):
         self.connection, self.log, self.ref = connection, log, ref
         self.closed = False
         self.capture_dir = None
@@ -297,7 +298,14 @@ class AgentSession:
         bridge = agent_bridge(settings)
         self.bridge = bridge(context, store, caller, log, ref, capture=self.capture,
                              **({"url_factory": url_factory} if url_factory else {}))
+        self.handoff = handoff
         processors = [self.transport.input(), self.bridge, self.transport.output()]
+        if handoff:
+            # The switch sits around the bridge; without a handoff the pipeline is unchanged.
+            processors = [self.transport.input(), handoff.switch.input, self.bridge, handoff.switch.output,
+                          self.transport.output()]
+            self.bridge.handoff = handoff
+            handoff.attach(self)
         if self.capture:
             processors.append(self.capture.recorder)
         self.worker = PipelineWorker(Pipeline(processors),
@@ -350,6 +358,8 @@ class AgentSession:
                 self.task.cancel()
                 await asyncio.gather(self.task, return_exceptions=True)
         await self.bridge.stop_socket()
+        if self.handoff:
+            await self.handoff.close()
         await self.connection.disconnect()
         if self.capture:
             try:

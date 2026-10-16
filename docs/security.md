@@ -10,6 +10,7 @@
 | Outbound calling | Operator only | WhatsApp connects only people who allowed calls from the business; a permission check before every connect; one attempt, never retried. A call permission request is one WhatsApp message per click, sent only when Meta's limits allow another, never retried |
 | Voice provider | Server only | ElevenLabs: signed URL fetched by the server, host pinned to `wss://api.elevenlabs.io`. Grok Voice: `XAI_API_KEY` sent only as a header to `wss://api.x.ai/v1/realtime`. `DEV_AGENT_WS_URL` is loopback only |
 | Calendar | Server only | `CAL_API_KEY` stays on the server; fixed host `https://api.cal.com`, no redirects, short timeouts; the model never sees Cal.com uids |
+| Inbox handoff (experimental) | Kapso only | Off unless `HUMAN_HANDOFF=1` and Kapso's per-project rollout. The server polls Kapso's Platform API with `KAPSO_API_KEY`; Kapso never calls it and no route is added. Kapso authorizes the teammate (reply rights in the conversation, one tab wins). The browser gets only STUN URLs and SDP; never a Kapso, provider or TURN credential. Only Kapso's commit moves audio; logs hold event names and reasons, no SDP |
 | Bookings, recordings | Local disk only | No HTTP route serves files; `DATA_DIR` 0700 and files 0600 (SQLite journal included) under any umask |
 
 Pipecat Cloud sessions (`cloud.py`) have no public route. Their start body is not signed, so each

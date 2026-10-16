@@ -174,7 +174,7 @@ def ensure_webhook(settings, url, client):
 
 def redact(text, settings):
     for secret in (settings.kapso_api_key, settings.webhook_secret, settings.elevenlabs_api_key,
-                   settings.operator_token, settings.caller_key_secret):
+                   settings.operator_token, settings.caller_key_secret, settings.cloudflare_turn_api_token):
         if secret:
             text = text.replace(secret, "[redacted]")
     return text
