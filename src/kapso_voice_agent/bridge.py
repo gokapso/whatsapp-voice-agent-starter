@@ -110,6 +110,18 @@ async def signed_url(settings):
     return url
 
 
+async def wait_for_provider(bridge):
+    """Readiness must arrive before disconnect, without leaving an orphan waiter."""
+    waiter = asyncio.create_task(bridge.ready.wait())
+    try:
+        await asyncio.wait({waiter, bridge.receive_task}, timeout=10, return_when=asyncio.FIRST_COMPLETED)
+        if not bridge.ready.is_set() or bridge.receive_task.done():
+            raise RuntimeError("Agent disconnected or timed out during return")
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+
+
 class ElevenAgentBridge(FrameProcessor):
     def __init__(self, context, store, caller, log, ref, url_factory=signed_url, capture=None):
         super().__init__()
@@ -122,6 +134,8 @@ class ElevenAgentBridge(FrameProcessor):
         self.input_buffer = bytearray()
         self.last_interrupt_id = -1
         self.stopping = False
+        self.preparing_return = False
+        self.ready = asyncio.Event()
         self.audio_in = self.audio_out = 0
         self.conversation_id = None
         self.url = None                  # signed URL, fetched when the pipeline starts
@@ -190,7 +204,8 @@ class ElevenAgentBridge(FrameProcessor):
     async def start_failed(self, error):
         self.log.add("agent_start_failed_" + type(error).__name__, self.ref)
         self.log.provider_failed(provider_problem(error), self.ref)
-        await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
+        if not self.preparing_return:
+            await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
 
     async def handle_event(self, message):
         kind = message.get("type")
@@ -199,6 +214,7 @@ class ElevenAgentBridge(FrameProcessor):
             if data["agent_output_audio_format"] != "pcm_16000" or data["user_input_audio_format"] != "pcm_16000":
                 raise ValueError("Agent audio format is not pcm_16000; fix the agent's tts/asr formats")
             self.conversation_id = data["conversation_id"]
+            self.ready.set()
             self.log.add("agent_session_ready", self.ref)
             self.log.provider_ok()
         elif kind == "audio":
@@ -243,9 +259,22 @@ class ElevenAgentBridge(FrameProcessor):
         except Exception as error:
             self.log.add("agent_receive_failed_" + type(error).__name__, self.ref)
         finally:
-            if not self.stopping:
+            if not self.stopping and not self.preparing_return:
                 # Ask the worker to end so it drains audio and exits its run loop.
                 await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
+
+    async def prepare_return(self):
+        # The teammate retains audio while a fresh provider session initializes.
+        await self.stop_socket()
+        self.preparing_return = True
+        self.stopping = self.opening = False
+        self.ready.clear()
+        self.input_buffer.clear()
+        self.last_interrupt_id = -1
+        self.conversation_id = None
+        self.url = await self.url_factory(self.context["settings"])
+        await self.open_conversation()
+        await wait_for_provider(self)
 
     async def stop_socket(self):
         self.stopping = True

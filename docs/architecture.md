@@ -95,9 +95,31 @@ Meta leg in -> HandoffInput -> agent bridge -> HandoffOutput -> Meta leg out
    already cut off both ways). The Meta call, its ID and its talk time do not change.
 4. After the switch, the call ends when Kapso reports the handoff ended (Hang up in Inbox, the
    caller hanging up) or the teammate's leg closes; this server then sends `terminate`.
-   The AI does not come back after the switch. `HANDOFF_MAX_SECONDS` (default 1800) replaces
-   `MAX_SESSION_SECONDS` from the switch on. An unexpected failure after the switch ends the call
+   **Return to agent** can reconnect the AI before closing the teammate leg (see below).
+   `HANDOFF_MAX_SECONDS` (default 1800) applies to each human segment; `MAX_SESSION_SECONDS`
+   applies to each AI segment, starting again after a successful return. An unexpected failure after the switch ends the call
    (reported as `bridge_failed`) instead of leaving the caller with silence.
+
+The starter advertises `return_to_agent_supported: true` to Kapso. On a committed handoff,
+only its joined browser tab sees **Return to agent**, behind the same project rollout gate.
+Kapso records a nonce-bound return request. This server sees it on the committed poll, opens a
+fresh session with the configured Grok or ElevenLabs agent, and waits for provider readiness.
+Human audio continues both ways; none of that audio is sent to the reconnecting AI. Up to eight
+seconds of the new greeting are buffered in memory until the switch, then discarded/released.
+The configured AI/recording disclosure is preserved.
+
+Once ready, the server acknowledges the nonce at `POST .../{id}/complete_return` with
+`outcome: ready`. Kapso ends only this handoff as `returned_to_agent`; the server flushes queued
+human audio, restores the AI route and closes the browser leg. The WhatsApp call stays connected.
+The AI can ask for a teammate again. If reconnecting fails, `outcome: failed` clears the request
+and the teammate keeps talking. Kapso also expires preparation after 30 seconds without ending
+the human call. Lost acknowledgements are retried with the same nonce. If ownership cannot be
+confirmed after repeated network failures, the call ends rather than leaving two owners or silence.
+
+This is a fresh AI conversation with the same agent configuration, caller identity and tools.
+The human segment is not recorded or sent as a transcript, and previous model context is not
+restored. Deploy the matching Kapso API/migration first, then this starter. Older starters do not
+advertise support, so they keep their existing human-only controls.
 
 Before the switch, everything that goes wrong ends only the attempt and the AI keeps the caller:
 nobody joins in 60 s, a decline, the project's rollout turned off, no ready report or no browser

@@ -15,7 +15,8 @@ ready (it plays this leg's audio and sends its microphone) AND this leg's media 
 commit at Kapso -> switch. Received packets alone are not readiness: a muted browser track still
 sends silence. Speech is never required. Until the commit the AI keeps the caller, and any failure (nobody
 joins, a decline, no media, Kapso refuses) ends only the attempt. After the commit the AI provider
-session is closed and does not come back: when the teammate's leg ends, the call ends.
+session is closed. Return to agent prepares a fresh provider session before moving audio back;
+otherwise, when the teammate's leg ends, the call ends.
 
 Logs hold event names, reasons and the hashed call reference only: no SDP or audio.
 """
@@ -32,6 +33,9 @@ from pipecat.transports.smallwebrtc.transport import RawAudioTrack
 
 from .bridge import media_path
 from .turn import handoff_ice
+
+RETURN_SECONDS = 20  # shorter than Kapso's 30 s return window
+RETURN_BUFFER_BYTES = 16000 * 2 * 8  # at most eight seconds of the new greeting
 
 SAMPLE_RATE = 16000
 CHUNK_10MS = SAMPLE_RATE // 100 * 2
@@ -73,6 +77,8 @@ class HandoffOutput(FrameProcessor):
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
         if self.switch.human and isinstance(frame, OutputAudioRawFrame) and direction == FrameDirection.DOWNSTREAM:
+            if self.switch.preparing_return and len(self.switch.return_audio) + len(frame.audio) <= RETURN_BUFFER_BYTES:
+                self.switch.return_audio.extend(frame.audio)
             self.switch.dropped_agent_frames += 1
             return
         await self.push_frame(frame, direction)
@@ -86,6 +92,8 @@ class HandoffSwitch:
 
     def __init__(self):
         self.human = False
+        self.preparing_return = False
+        self.return_audio = bytearray()
         self.leg = None
         self.dropped_agent_frames = 0
         self.input = HandoffInput(self)
@@ -180,6 +188,8 @@ class CallHandoff:
         self.leg = None
         self.task = None
         self.committed_at = None
+        self.agent_returned_at = None
+        self.return_key = None
         self.request_seconds, self.join_seconds = REQUEST_SECONDS, JOIN_SECONDS
         self.poll_seconds, self.committed_poll_seconds = POLL_SECONDS, COMMITTED_POLL_SECONDS
 
@@ -360,7 +370,7 @@ class CallHandoff:
 
     async def stay_with_teammate(self, client):
         """Until the teammate's leg ends or Kapso reports the handoff ended (Hang up, call end).
-        The AI does not come back: the call then ends."""
+        A requested return prepares the AI while the human keeps audio."""
         reason = None
         while reason is None:
             try:
@@ -368,9 +378,79 @@ class CallHandoff:
                 reason = await self.leg_end_reason(client)
             except TimeoutError:
                 data = await self.read(client)
+                if data and data["state"] == "committed" and data.get("return_pending") and data.get("return_request_key"):
+                    if data["return_request_key"] != self.return_key:
+                        self.return_key = data["return_request_key"]
+                        if await self.return_to_agent(client, self.return_key):
+                            return
                 if data and data["state"] == "ended":
                     reason = data.get("end_reason") or "ended"
         await self.leave_teammate(client, reason)
+
+    async def return_to_agent(self, client, key):
+        """Make before break: keep human media until Kapso confirms the prepared agent's return.
+        A lost acknowledgement is recovered with the same nonce, never a second switch."""
+        bridge = self.session.bridge
+        self.switch.preparing_return = True
+        self.switch.return_audio.clear()
+        try:
+            await asyncio.wait_for(bridge.prepare_return(), RETURN_SECONDS)
+        except Exception as error:  # noqa: BLE001 - the human remains on the call
+            self.log.add("handoff_return_failed_" + type(error).__name__, self.ref)
+            await bridge.stop_socket()
+            bridge.preparing_return = False
+            self.switch.preparing_return = False
+            self.switch.return_audio.clear()
+            try:
+                await client.complete_return(self.handoff_id, key, "failed")
+            except Exception:  # noqa: BLE001 - Kapso also expires this pending attempt
+                pass
+            return False
+
+        # Retry a potentially lost response. Never fall back to human after an unknown commit:
+        # the browser may already have seen the return and closed its peer.
+        confirmed = None
+        for _ in range(MAX_POLL_FAILURES):
+            try:
+                status, data = await client.complete_return(self.handoff_id, key, "ready")
+                if status == 200:
+                    confirmed = data
+                    break
+                confirmed = await self.read(client)
+                if confirmed:
+                    break
+            except httpx.TransportError:
+                await asyncio.sleep(self.poll_seconds)
+        if confirmed and confirmed.get("end_reason") == "returned_to_agent" and confirmed.get("return_request_key") == key:
+            # Flush queued teammate audio, then release the buffered AI greeting in order.
+            self.leg.sink = None
+            await self.switch.output.broadcast_interruption()
+            audio = bytes(self.switch.return_audio)
+            self.switch.return_audio.clear()
+            self.switch.preparing_return = False
+            self.switch.human = False
+            self.switch.leg = None
+            bridge.preparing_return = False
+            if audio:
+                await self.switch.output.play(audio)
+            await self.leg.close()
+            self.leg = None
+            self.state = "idle"
+            self.committed_at = None
+            self.agent_returned_at = asyncio.get_running_loop().time()
+            self.log.add("handoff_returned_to_agent", self.ref)
+            # If the provider closed after readiness, its suppressed end must now end the call.
+            if bridge.receive_task.done():
+                await self.session.runner.cancel()
+            return True
+        await bridge.stop_socket()
+        bridge.preparing_return = False
+        self.switch.preparing_return = False
+        self.switch.return_audio.clear()
+        if confirmed and confirmed.get("state") == "committed":
+            return False  # expiry/rollback/refusal: the human still owns audio
+        await self.leave_teammate(client, "bridge_failed")
+        return True
 
     async def leave_teammate(self, client, reason):
         """After the switch the AI does not come back: the session ends and the call manager sends

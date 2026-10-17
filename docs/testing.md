@@ -166,3 +166,17 @@ request (`permission_request_sent`), and that **Call this person** turns on afte
 calls. A second request on the same day is refused (`permission_request_limited`). Then check a
 declined call, an unanswered call and an answered call. `permission_request_failed code=131047`
 means no message from the phone in the last 24 hours.
+
+
+### Return to agent (controlled live check)
+
+With the matching Kapso API deployed and the project handoff rollout enabled, start an inbound
+WhatsApp call and join it from Inbox. Select **Return to agent**. While reconnecting, verify the
+caller and teammate can still hear each other. After the switch, verify the caller hears the AI,
+the teammate's microphone stops, and Inbox shows the ongoing external call. Ask for a person again
+and join the second handoff. The original WhatsApp call must stay connected throughout.
+
+Repeat with provider reconnection deliberately unavailable: the teammate must keep the call and
+see recovery copy. Check Hang up during preparation and disabling the rollout. No automated test
+places a real call. Offline tests use local WebRTC peers, synthetic tones and provider WebSockets;
+they prove routing and failure recovery, not live provider conversation quality or handset delivery.

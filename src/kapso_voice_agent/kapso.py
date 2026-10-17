@@ -117,7 +117,8 @@ class KapsoClient:
 
     async def request_handoff(self, call_id, request_key, stun_urls):
         return await self.platform("POST", "", {"phone_number_id": self.phone_number_id, "call_id": call_id,
-                                                "request_key": request_key, "stun_urls": stun_urls})
+                                                "request_key": request_key, "stun_urls": stun_urls,
+                                                "return_to_agent_supported": True})
 
     async def handoff(self, handoff_id):
         return await self.platform("GET", "/" + quote(handoff_id, safe=""))
@@ -127,6 +128,10 @@ class KapsoClient:
 
     async def commit_handoff(self, handoff_id):
         return await self.platform("POST", f"/{quote(handoff_id, safe='')}/commit", {})
+
+    async def complete_return(self, handoff_id, request_key, outcome):
+        return await self.platform("POST", f"/{quote(handoff_id, safe='')}/complete_return",
+                                   {"request_key": request_key, "outcome": outcome})
 
     async def end_handoff(self, handoff_id, reason):
         return await self.platform("POST", f"/{quote(handoff_id, safe='')}/end", {"reason": reason})
