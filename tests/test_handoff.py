@@ -91,8 +91,9 @@ class Ear:
 class ToneAgent:
     """ElevenLabs-shaped agent that talks continuously at 1000 Hz and counts caller audio."""
 
-    def __init__(self):
+    def __init__(self, fail_after=None):
         self.user_chunks, self.server, self.closed = [], None, asyncio.Event()
+        self.fail_after, self.connections = fail_after, 0
 
     async def __aenter__(self):
         self.server = await serve(self.handle, "127.0.0.1", 0).__aenter__()
@@ -110,7 +111,11 @@ class ToneAgent:
         return make
 
     async def handle(self, socket):
+        self.connections += 1
         await socket.recv()
+        if self.fail_after is not None and self.connections > self.fail_after:
+            await socket.close()
+            return
         await socket.send(json.dumps({"type": "conversation_initiation_metadata", "conversation_initiation_metadata_event": {
             "conversation_id": "fake-conversation-0002", "user_input_audio_format": "pcm_16000",
             "agent_output_audio_format": "pcm_16000"}}))
@@ -140,6 +145,7 @@ class FakeHandoffs:
 
     def __init__(self, refuse_request=False):
         self.rows, self.requests, self.ends, self.refuse_request = {}, [], [], refuse_request
+        self.lose_return_ack = False
 
     async def __call__(self, request):
         path = request.url.path
@@ -151,7 +157,7 @@ class FakeHandoffs:
             self.requests.append(body)
             if self.refuse_request:
                 return httpx.Response(403, json={"error": "handoff_unavailable"})
-            row = self.rows.setdefault(body["request_key"], {"id": "handoff-1", "state": "requested",
+            row = self.rows.setdefault(body["request_key"], {"id": f"handoff-{len(self.rows) + 1}", "state": "requested",
                                                              "end_reason": None, "offer": None, "answer": None,
                                                              "browser_ready": False})
             return self.render(row, 201)
@@ -167,6 +173,14 @@ class FakeHandoffs:
                 return httpx.Response(409, json={"error": "handoff_ended", "state": row["state"],
                                                  "end_reason": row["end_reason"]})
             row["state"] = "committed"
+        elif action == "complete_return":
+            assert body["request_key"] == row["return_request_key"]
+            row["return_pending"] = False
+            if body["outcome"] == "ready":
+                self.end(row, "returned_to_agent")
+                if self.lose_return_ack:
+                    self.lose_return_ack = False
+                    raise httpx.ReadError("synthetic lost acknowledgement")
         elif action == "end":
             self.ends.append(body["reason"])
             self.end(row, body["reason"])
@@ -176,11 +190,13 @@ class FakeHandoffs:
         offer = row["offer"] if row["state"] == "joining" and not row["answer"] else None
         return httpx.Response(status, json={"data": {"id": row["id"], "state": row["state"],
                                                      "end_reason": row["end_reason"], "offer_sdp": offer,
-                                                     "browser_ready": row["browser_ready"]}})
+                                                     "browser_ready": row["browser_ready"],
+                                                     "return_pending": row.get("return_pending", False),
+                                                     "return_request_key": row.get("return_request_key")}})
 
     @property
     def row(self):
-        return next(iter(self.rows.values()))
+        return list(self.rows.values())[-1]
 
     def end(self, row, reason):
         if row["state"] != "ended":
@@ -637,4 +653,130 @@ def test_turn_failure_keeps_the_ai_and_the_same_call(handoff_settings, spec, sto
                 await app.state.manager.shutdown()
                 await caller.close()
                 await ear.close()
+    run(go)
+
+
+@pytest.mark.parametrize("provider", ["elevenlabs", "grok"])
+def test_return_reconnects_agent_without_replacing_the_call_and_can_handoff_again(
+        handoff_settings, spec, store, fast_handoff, provider):
+    from handoff_fakes import FakeGrokAgent
+
+    async def go():
+        handoffs = FakeHandoffs()
+        kapso = KapsoRecorder(handoffs)
+        agent = FakeGrokAgent() if provider == "grok" else ToneAgent()
+        async with agent:
+            settings = replace(handoff_settings, voice_provider=provider)
+            kwargs = {"session_factory": agent.factory()} if provider != "grok" else {}
+            if provider == "grok":
+                settings = replace(settings, dev_agent_ws_url=agent.url)
+            app = create_app(settings, spec, store, kapso_factory=kapso.factory(), **kwargs)
+            caller, teammate = RTCPeerConnection(), RTCPeerConnection()
+            ear, human_ear = Ear(caller), Ear(teammate)
+            try:
+                job = await start_call(app, kapso, caller)
+                await ear.wait_for(AGENT_HZ)
+                session = app.state.manager.sessions[CALL_ID]
+                assert (await session.handoff.request())["ok"]
+                assert handoffs.requests[0]["return_to_agent_supported"] is True
+                await teammate_joins(handoffs, teammate)
+                await wait_for_event(app.state.log, "handoff_committed", timeout=10)
+                await ear.wait_for(TEAMMATE_HZ)
+                await human_ear.wait_for(CALLER_HZ)
+                before = asyncio.get_running_loop().time()
+                # Readiness is deliberately delayed. Human audio continues throughout preparation.
+                prepare = session.bridge.prepare_return
+                preparing, release = asyncio.Event(), asyncio.Event()
+
+                async def delayed():
+                    preparing.set()
+                    await release.wait()
+                    await prepare()
+                session.bridge.prepare_return = delayed
+                handoffs.row.update(return_request_key="return-attempt-0001", return_pending=True)
+                await asyncio.wait_for(preparing.wait(), 3)
+                await ear.wait_for(TEAMMATE_HZ, since=before)
+                assert session.handoff.switch.human
+                assert not job.done()
+                handoffs.lose_return_ack = True
+                release.set()
+                await wait_for_event(app.state.log, "handoff_returned_to_agent", timeout=10)
+                returned = asyncio.get_running_loop().time()
+                await ear.wait_for(AGENT_HZ, since=returned)
+                await asyncio.sleep(0.3)
+                assert ear.count(TEAMMATE_HZ, since=returned + 0.2) == 0
+                assert not session.handoff.switch.human
+                assert session.handoff.state == "idle"
+                assert app.state.manager.sessions[CALL_ID] is session
+                assert not job.done()
+                assert kapso.actions == ["pre_accept", "accept"]
+                # A second request creates a fresh attempt on this same still-live call.
+                assert (await session.handoff.request())["status"] == "requested"
+                assert len(handoffs.requests) == 2
+            finally:
+                await app.state.manager.shutdown()
+                await caller.close()
+                await teammate.close()
+                await ear.close()
+                await human_ear.close()
+    run(go)
+
+
+def test_failed_agent_return_leaves_human_audio_connected(handoff_settings, spec, store, fast_handoff):
+    async def go():
+        handoffs = FakeHandoffs()
+        kapso = KapsoRecorder(handoffs)
+        async with ToneAgent(fail_after=1) as agent:
+            app = create_app(handoff_settings, spec, store, session_factory=agent.factory(), kapso_factory=kapso.factory())
+            caller, teammate = RTCPeerConnection(), RTCPeerConnection()
+            ear = Ear(caller)
+            try:
+                job = await start_call(app, kapso, caller)
+                await ear.wait_for(AGENT_HZ)
+                session = app.state.manager.sessions[CALL_ID]
+                await session.handoff.request()
+                await teammate_joins(handoffs, teammate)
+                await wait_for_event(app.state.log, "handoff_committed", timeout=10)
+
+                handoffs.row.update(return_request_key="return-failed-0001", return_pending=True)
+                await wait_for_event(app.state.log, "handoff_return_failed_runtimeerror", timeout=5)
+                await ear.wait_for(TEAMMATE_HZ, since=asyncio.get_running_loop().time())
+                assert session.handoff.switch.human
+                assert not handoffs.row["return_pending"]
+                assert not job.done()
+                assert kapso.actions == ["pre_accept", "accept"]
+            finally:
+                await app.state.manager.shutdown()
+                await caller.close()
+                await teammate.close()
+                await ear.close()
+    run(go)
+
+
+def test_returned_agent_gets_a_fresh_segment_deadline(handoff_settings):
+    from types import SimpleNamespace
+
+    from kapso_voice_agent.calls import CallManager
+
+    async def go():
+        loop = asyncio.get_running_loop()
+        handoff = SimpleNamespace(committed_at=None, agent_returned_at=None)
+        task = asyncio.create_task(asyncio.sleep(0.2))
+        session = SimpleNamespace(task=task, handoff=handoff)
+        manager = SimpleNamespace(settings=replace(handoff_settings, max_session_seconds=0.15, handoff_max_seconds=0.1))
+
+        async def switches():
+            await asyncio.sleep(0.01)
+            handoff.committed_at = loop.time()
+            await asyncio.sleep(0.07)
+            handoff.committed_at = None
+            handoff.agent_returned_at = loop.time()
+        switching = asyncio.create_task(switches())
+        try:
+            await CallManager.wait_for_session(manager, session)
+            assert task.done() and not task.cancelled()
+        finally:
+            switching.cancel()
+            task.cancel()
+            await asyncio.gather(switching, task, return_exceptions=True)
     run(go)

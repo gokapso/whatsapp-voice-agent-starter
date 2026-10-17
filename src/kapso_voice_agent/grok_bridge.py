@@ -36,7 +36,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosedOK
 
-from .bridge import CHUNK_BYTES, SAMPLE_RATE, provider_problem
+from .bridge import CHUNK_BYTES, SAMPLE_RATE, provider_problem, wait_for_provider
 from .tools import TOOLS, ToolRunner, provider_tool_definitions
 
 XAI_REALTIME = "wss://api.x.ai/v1/realtime"
@@ -139,6 +139,7 @@ class GrokAgentBridge(FrameProcessor):
         self.receive_task = None
         self.input_buffer = bytearray()
         self.stopping = False
+        self.preparing_return = False
         self.audio_in = self.audio_out = 0
         self.conversation_id = None
         self.ready = asyncio.Event()
@@ -361,8 +362,26 @@ class GrokAgentBridge(FrameProcessor):
             if not self.ready.is_set():
                 self.log.provider_failed(provider_problem(error), self.ref)
         finally:
-            if not self.stopping:
+            if not self.stopping and not self.preparing_return:
                 await self.push_frame(EndWorkerFrame(), FrameDirection.UPSTREAM)
+
+    async def prepare_return(self):
+        await self.stop_socket()
+        self.preparing_return = True
+        self.stopping = self.ending = False
+        self.ready.clear()
+        self.input_buffer.clear()
+        self.responding.clear()
+        self.dropped.clear()
+        self.agent_text.clear()
+        self.conversation_id = None
+        self.greeting_pending = self.greeting_sent = self.tool_outputs_pending = False
+        self.greeting_response = None
+        self.greeting_until = self.playback_until = 0.0
+        url, headers = await self.url_factory(self.context["settings"], self.context["spec"])
+        self.websocket = await connect(url, additional_headers=headers, open_timeout=10, max_size=4_000_000)
+        self.receive_task = self.create_task(self.receive(), name="grok-agent-events")
+        await wait_for_provider(self)
 
     async def stop_socket(self):
         self.stopping = True

@@ -252,14 +252,23 @@ class CallManager:
     async def wait_for_session(self, session):
         """MAX_SESSION_SECONDS bounds the AI. A teammate who took the call over (handoff.py) has
         HANDOFF_MAX_SECONDS from the switch instead."""
-        try:
-            await asyncio.wait_for(asyncio.shield(session.task), timeout=self.settings.max_session_seconds)
-        except TimeoutError:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        while not session.task.done():
             handoff = getattr(session, "handoff", None)
-            if not (handoff and handoff.committed_at):
-                raise
-            remaining = handoff.committed_at + self.settings.handoff_max_seconds - asyncio.get_running_loop().time()
-            await asyncio.wait_for(asyncio.shield(session.task), timeout=max(remaining, 0))
+            if handoff and handoff.committed_at is not None:
+                deadline = handoff.committed_at + self.settings.handoff_max_seconds
+            else:
+                since = handoff.agent_returned_at if handoff and handoff.agent_returned_at is not None else started
+                deadline = since + self.settings.max_session_seconds
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
+            # A switch changes the applicable deadline. Check once per second, without cancelling
+            # the underlying session when this short wait expires.
+            done, _ = await asyncio.wait({session.task}, timeout=min(remaining, 1.0))
+            if done:
+                return await session.task
 
     async def request_handoff(self, ref):
         """Operator command: ask an Inbox teammate to take over this call. None if no such call."""
