@@ -2,7 +2,14 @@
 # WebRTC media does not use port 8080. Read docs/deploy.md before running this anywhere real.
 FROM python:3.12-slim-bookworm
 
-COPY --from=ghcr.io/astral-sh/uv:0.11.21 /uv /bin/uv
+COPY scripts/check-system-ca.sh /usr/local/bin/check-system-ca
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && sh /usr/local/bin/check-system-ca \
+    && rm -rf /var/lib/apt/lists/*
+
+
+COPY --from=ghcr.io/astral-sh/uv:0.13.4 /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never UV_PROJECT_ENVIRONMENT=/app/.venv
 WORKDIR /app
 
