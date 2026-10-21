@@ -5,6 +5,13 @@
 # instead of replacing it, so the base image's own packages (pipecatcloud) stay installed.
 FROM dailyco/pipecat-base:0.2.5-py3.12
 
+COPY --from=ghcr.io/astral-sh/uv:0.13.4 /uv /bin/uv
+COPY scripts/check-system-ca.sh /usr/local/bin/check-system-ca
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && sh /usr/local/bin/check-system-ca \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml uv.lock README.md LICENSE /starter/
 RUN cd /starter \
     && uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
