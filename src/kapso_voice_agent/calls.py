@@ -17,6 +17,7 @@ import secrets
 
 from .bridge import ElevenSession, make_connection, meta_sdp
 from .events import call_ref
+from .handoff import CallHandoff
 from .kapso import HANDLED_ELSEWHERE, KapsoClient, KapsoError
 from .outbound import OutboundCalls
 from .recording import RecordingCheck
@@ -210,11 +211,15 @@ class CallManager:
                 self.remember(call_id, "accepted")
                 self.log.add("accept_ok", ref)
             caller = self.caller_key(call.get("from_user_id") or call.get("from") or call_id)
+            extra = {}
+            if self.settings.handoff_ready:
+                extra["handoff"] = CallHandoff(self.settings, self.kapso_factory, self.connection_factory, self.log,
+                                               ref, call_id)
             session = self.session_factory(connection, self.settings, self.spec, self.store, caller, self.log, ref,
-                                           direction="inbound", recording=recording)
+                                           direction="inbound", recording=recording, **extra)
             self.sessions[call_id] = session
             await session.start()
-            await asyncio.wait_for(asyncio.shield(session.task), timeout=self.settings.max_session_seconds)
+            await self.wait_for_session(session)
             self.log.add("session_finished", ref)
         except asyncio.CancelledError:
             self.log.add("caller_hangup", ref)
@@ -243,6 +248,25 @@ class CallManager:
             finally:
                 await client.close()
                 self.sessions.pop(call_id, None)
+
+    async def wait_for_session(self, session):
+        """MAX_SESSION_SECONDS bounds the AI. A teammate who took the call over (handoff.py) has
+        HANDOFF_MAX_SECONDS from the switch instead."""
+        try:
+            await asyncio.wait_for(asyncio.shield(session.task), timeout=self.settings.max_session_seconds)
+        except TimeoutError:
+            handoff = getattr(session, "handoff", None)
+            if not (handoff and handoff.committed_at):
+                raise
+            remaining = handoff.committed_at + self.settings.handoff_max_seconds - asyncio.get_running_loop().time()
+            await asyncio.wait_for(asyncio.shield(session.task), timeout=max(remaining, 0))
+
+    async def request_handoff(self, ref):
+        """Operator command: ask an Inbox teammate to take over this call. None if no such call."""
+        for call_id, session in list(self.sessions.items()):
+            if call_ref(call_id) == ref and getattr(session, "handoff", None):
+                return await session.handoff.request()
+        return None
 
     # Browser test calls (operator only) ----------------------------------------------------
 
@@ -295,8 +319,15 @@ class CallManager:
         return False
 
     def snapshot(self):
-        return [{"ref": call_ref(call_id), "direction": self.directions.get(call_id, "unknown"),
-                 "state": self.seen.get(call_id, "active")} for call_id in self.jobs]
+        calls = []
+        for call_id in self.jobs:
+            handoff = getattr(self.sessions.get(call_id), "handoff", None)
+            row = {"ref": call_ref(call_id), "direction": self.directions.get(call_id, "unknown"),
+                   "state": self.seen.get(call_id, "active")}
+            if handoff:
+                row["handoff"] = handoff.state
+            calls.append(row)
+        return calls
 
     async def shutdown(self):
         jobs = list(self.jobs.values()) + list(self.background)

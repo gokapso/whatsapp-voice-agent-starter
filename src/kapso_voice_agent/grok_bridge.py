@@ -51,6 +51,17 @@ END_CALL = {"type": "function", "name": "end_call",
             "description": "End the call when the caller says goodbye, asks to hang up, or confirms they need "
                            "nothing else. Say one short goodbye first.",
             "parameters": {"type": "object", "properties": {}, "required": []}}
+# Experimental (handoff.py): offered only when this server and the call can hand over to Inbox.
+TRANSFER_TO_HUMAN = {"type": "function", "name": "transfer_to_human",
+                     "description": "Ask a teammate in Kapso Inbox to take over this call, when the caller asks for a "
+                                    "person or you cannot help. Takes no arguments. Keep helping while they wait.",
+                     "parameters": {"type": "object", "properties": {}, "required": []}}
+HANDOFF_INSTRUCTIONS = (
+    "\n\n## Handing the call to a person\n"
+    "When the caller asks for a person, or you cannot help, call transfer_to_human. If it says ok, tell the "
+    "caller you are asking a teammate to join, and keep helping until they do. Never say a person is on the "
+    "line. If it says no, say no teammate can join right now and keep helping.")
+HANDOFF_UNAVAILABLE_LINE = "I couldn't reach a teammate right now. I can keep helping you."
 VARIABLE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 SAFE_CODE = re.compile(r"[^a-z0-9_]+")
 
@@ -61,13 +72,14 @@ def render_instructions(prompt, variables):
     return VARIABLE.sub(lambda match: str(variables.get(match.group(1), match.group(0))), prompt)
 
 
-def grok_tools():
-    """The ElevenLabs client tool schemas as xAI function tools, plus end_call."""
+def grok_tools(handoff=False):
+    """The ElevenLabs client tool schemas as xAI function tools, plus end_call (and transfer_to_human)."""
     return [{"type": "function", "name": tool["name"], "description": tool["description"],
-             "parameters": tool["parameters"]} for tool in provider_tool_definitions()] + [END_CALL]
+             "parameters": tool["parameters"]} for tool in provider_tool_definitions()] + [END_CALL] + (
+        [TRANSFER_TO_HUMAN] if handoff else [])
 
 
-def session_update(spec, variables):
+def session_update(spec, variables, handoff=False):
     raw = spec.raw
     keyterms = [str(word)[:50] for word in raw.get("asr", {}).get("keywords", [])][:100]
     transcription = {"language_hint": raw["agent"]["language"]}
@@ -75,11 +87,11 @@ def session_update(spec, variables):
         transcription["keyterms"] = keyterms
     pcm = {"type": "audio/pcm", "rate": SAMPLE_RATE}
     return {"type": "session.update", "session": {
-        "instructions": render_instructions(spec.prompt, variables),
+        "instructions": render_instructions(spec.prompt, variables) + (HANDOFF_INSTRUCTIONS if handoff else ""),
         "voice": spec.grok["voice"],
         "turn_detection": {"type": "server_vad"},
         "audio": {"input": {"format": pcm, "transcription": transcription}, "output": {"format": pcm}},
-        "tools": grok_tools(),
+        "tools": grok_tools(handoff),
     }}
 
 
@@ -141,6 +153,7 @@ class GrokAgentBridge(FrameProcessor):
         self.tool_outputs_pending = False
         self.ending = False
         self.agent_text = {}
+        self.handoff = None              # handoff.CallHandoff when a teammate may take over
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
@@ -190,7 +203,8 @@ class GrokAgentBridge(FrameProcessor):
         kind = message.get("type")
         if kind == "conversation.created":
             self.conversation_id = str((message.get("conversation") or {}).get("id") or "")[:128] or None
-            await self.send(session_update(self.context["spec"], self.context["dynamic_variables"]))
+            await self.send(session_update(self.context["spec"], self.context["dynamic_variables"],
+                                           handoff=self.handoff is not None))
         elif kind == "session.updated":
             if self.ready.is_set():
                 return
@@ -270,11 +284,29 @@ class GrokAgentBridge(FrameProcessor):
         if self.capture:
             self.capture.add_turn("agent", opening)
 
+    async def handoff_unavailable(self):
+        """A requested teammate did not take the call: say so with a fixed line, then keep going."""
+        if self.websocket is None or not self.ready.is_set():
+            return
+        try:
+            await self.send({"type": "conversation.item.create", "item": {
+                "type": "force_message", "role": "assistant", "interruptible": True,
+                "content": [{"type": "output_text", "text": HANDOFF_UNAVAILABLE_LINE}]}})
+        except Exception as error:  # noqa: BLE001 - the call goes on without the line
+            self.log.add("handoff_notice_failed_" + type(error).__name__, self.ref)
+
     async def run_tool(self, message):
         name, call_id = str(message.get("name") or ""), str(message.get("call_id") or "")[:128]
         if name == "end_call":
             self.ending = True
             self.log.add("tool_end_call_ok", self.ref)
+            return
+        if name == "transfer_to_human" and self.handoff:
+            result = await self.handoff.request()
+            self.log.add(f"tool_transfer_to_human_{'ok' if result['ok'] else 'failed'}", self.ref)
+            await self.send({"type": "conversation.item.create", "item": {
+                "type": "function_call_output", "call_id": call_id, "output": json.dumps(result)}})
+            self.tool_outputs_pending = True
             return
         try:
             parameters = json.loads(message.get("arguments") or "{}")
