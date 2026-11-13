@@ -84,6 +84,8 @@ class RecordingCheck:
             return Recording(provider=False, local=settings.local_capture, source="offline_fake_agent")
         if settings.voice_provider == "grok":
             return Recording(provider=True, local=settings.local_capture, source="xai_default_retention")
+        if settings.voice_provider == "openai":
+            return Recording(provider=True, local=settings.local_capture, source="openai_default_retention")
         async with self.lock:
             if self.cached and self.clock() - self.checked_at < CHECK_TTL_SECONDS:
                 return self.cached
@@ -117,7 +119,7 @@ class RecordingCheck:
         settings = self.settings
         if settings.dev_agent_ws_url:
             provider = "off (offline fake agent)"
-        elif settings.voice_provider == "grok":
+        elif settings.voice_provider in ("grok", "openai"):
             provider = "on"  # xAI's default 30-day retention; see the module docstring
         elif self.cached and self.clock() - self.checked_at < CHECK_TTL_SECONDS:
             provider = "on" if self.cached.provider else "off"

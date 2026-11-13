@@ -105,6 +105,7 @@ def cmd_check(args):
                                      "ELEVENLABS_API_KEY": settings.elevenlabs_api_key,
                                      "ELEVENLABS_AGENT_ID": settings.elevenlabs_agent_id,
                                      "XAI_API_KEY": settings.xai_api_key,
+                                     "OPENAI_API_KEY": settings.openai_api_key,
                                      "OPERATOR_TOKEN": settings.operator_token,
                                      "CALLER_KEY_SECRET": settings.caller_key_secret}.items() if v),
         "problems": problems,
@@ -342,6 +343,8 @@ def voice_label(settings, spec):
     """The provider a call talks to, for people. Names only, never a key."""
     if settings.voice_provider == "grok":
         return f"Grok Voice ({spec.grok['model']}, voice {spec.grok['voice']})"
+    if settings.voice_provider == "openai":
+        return f"OpenAI Realtime ({spec.openai['model']}, voice {spec.openai['voice']})"
     return "ElevenLabs Agents"
 
 

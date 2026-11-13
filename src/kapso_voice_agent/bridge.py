@@ -273,10 +273,13 @@ def session_context(settings, spec, store, direction, recording):
 
 
 def agent_bridge(settings):
-    """The bridge for VOICE_PROVIDER: ElevenLabs Agents (default) or xAI Grok Voice."""
+    """The bridge for VOICE_PROVIDER: ElevenLabs Agents (default), xAI Grok Voice or OpenAI Realtime."""
     if settings.voice_provider == "grok":
         from .grok_bridge import GrokAgentBridge
         return GrokAgentBridge
+    if settings.voice_provider == "openai":
+        from .openai_bridge import OpenAIAgentBridge
+        return OpenAIAgentBridge
     return ElevenAgentBridge
 
 

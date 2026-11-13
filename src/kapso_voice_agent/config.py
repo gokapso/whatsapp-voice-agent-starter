@@ -11,7 +11,7 @@ from dotenv import dotenv_values
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIN_TOKEN_LENGTH = 32
 # Who runs the conversation: ElevenLabs Agents (default) or xAI Grok Voice (speech to speech).
-VOICE_PROVIDERS = ("elevenlabs", "grok")
+VOICE_PROVIDERS = ("elevenlabs", "grok", "openai")
 
 
 class ConfigError(ValueError):
@@ -46,6 +46,7 @@ class Settings:
     elevenlabs_agent_id: str = ""
     voice_provider: str = "elevenlabs"
     xai_api_key: str = ""
+    openai_api_key: str = ""
     cal_api_key: str = ""
     # "calcom" (real bookings), "local" (offline development calendar) or "" (none: no calls start).
     calendar: str = ""
@@ -88,6 +89,9 @@ class Settings:
         if self.voice_provider == "grok":
             if not (self.dev_agent_ws_url or self.xai_api_key):
                 missing.append("XAI_API_KEY (or DEV_AGENT_WS_URL)")
+        elif self.voice_provider == "openai":
+            if not (self.dev_agent_ws_url or self.openai_api_key):
+                missing.append("OPENAI_API_KEY (or DEV_AGENT_WS_URL)")
         elif not (self.dev_agent_ws_url or (self.elevenlabs_api_key and self.elevenlabs_agent_id)):
             missing.append("ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID (or DEV_AGENT_WS_URL)")
         if not (self.caller_key_secret or self.webhook_secret):
@@ -143,7 +147,7 @@ def load_settings(environ=None, env_file=None):
 
     voice_provider = get("VOICE_PROVIDER").lower() or "elevenlabs"
     if voice_provider not in VOICE_PROVIDERS:
-        raise ConfigError("VOICE_PROVIDER must be elevenlabs (default) or grok")
+        raise ConfigError("VOICE_PROVIDER must be elevenlabs (default), grok or openai")
 
     data_dir = Path(get("DATA_DIR") or REPO_ROOT / "data")
     agent_config = Path(get("AGENT_CONFIG_PATH") or REPO_ROOT / "agent/agent.toml")
@@ -156,6 +160,7 @@ def load_settings(environ=None, env_file=None):
         elevenlabs_agent_id=get("ELEVENLABS_AGENT_ID"),
         voice_provider=voice_provider,
         xai_api_key=get("XAI_API_KEY"),
+        openai_api_key=get("OPENAI_API_KEY"),
         cal_api_key=cal_api_key,
         calendar=calendar,
         operator_token=operator_token,

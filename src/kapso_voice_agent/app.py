@@ -217,15 +217,17 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
 
     def voice_status():
         """Which provider a browser call would talk to. Names only; never a key."""
-        grok = settings.voice_provider == "grok"
+        provider = settings.voice_provider
+        realtime = {"grok": (spec.grok, settings.xai_api_key, "Grok Voice"),
+                    "openai": (spec.openai, settings.openai_api_key, "OpenAI Realtime")}.get(provider)
         setup_step = None  # what the console asks for next: "api_key", then "create_agent" (ElevenLabs)
         if not settings.dev_agent_ws_url:
-            if not (settings.xai_api_key if grok else settings.elevenlabs_api_key):
+            if not (realtime[1] if realtime else settings.elevenlabs_api_key):
                 setup_step = "api_key"
-            elif not grok and not settings.elevenlabs_agent_id:
+            elif not realtime and not settings.elevenlabs_agent_id:
                 setup_step = "create_agent"
-        return {"provider": settings.voice_provider, "label": "Grok Voice" if grok else "ElevenLabs Agents",
-                "model": spec.grok["model"] if grok else None, "voice": spec.grok["voice"] if grok else None,
+        return {"provider": provider, "label": realtime[2] if realtime else "ElevenLabs Agents",
+                "model": realtime[0]["model"] if realtime else None, "voice": realtime[0]["voice"] if realtime else None,
                 "offline_fake_agent": bool(settings.dev_agent_ws_url), "setup_step": setup_step,
                 "problem": log.provider_problem}
 

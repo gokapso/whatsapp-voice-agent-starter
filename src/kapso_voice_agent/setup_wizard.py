@@ -43,7 +43,7 @@ PLAIN = {"WHATSAPP_PHONE_NUMBER_ID": "Meta phone number ID (numeric, not the dis
 VALUE = re.compile(r"^[A-Za-z0-9._~+/=:@-]{1,512}$")
 CLIPBOARDS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["clip.exe"])
 # What a hosted server reads. DATA_DIR comes from the image; DEV_AGENT_WS_URL is loopback-only.
-SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
+SERVER_KEYS = ("VOICE_PROVIDER", "XAI_API_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "CAL_API_KEY", "CALENDAR",
                "OPERATOR_TOKEN", "CALLER_KEY_SECRET", "KAPSO_API_KEY", "WHATSAPP_PHONE_NUMBER_ID",
                "WHATSAPP_WEBHOOK_SECRET", "META_GRAPH_VERSION", "ICE_SERVERS_JSON",
                "MAX_SESSION_SECONDS", "MAX_CONCURRENT_CALLS", "LOCAL_CAPTURE", "CAPTURE_RETENTION_DAYS",

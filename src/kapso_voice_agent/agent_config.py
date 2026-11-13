@@ -44,6 +44,11 @@ class AgentSpec:
         return {**GROK_DEFAULTS, **self.raw.get("grok", {})}
 
     @property
+    def openai(self):
+        """[openai] settings for VOICE_PROVIDER=openai, with defaults when the section is absent."""
+        return {**OPENAI_DEFAULTS, **self.raw.get("openai", {})}
+
+    @property
     def max_duration_seconds(self):
         return int(self.raw["limits"]["max_duration_seconds"])
 
@@ -87,11 +92,13 @@ REQUIRED = {
 # greetings and the prompt's instructions; `voice-agent check` enforces it.
 FILLER_PHRASES = ("one second", "one moment", "hold on", "bear with me", "just a sec")
 GROK_DEFAULTS = {"model": "grok-voice-3.0", "voice": "eve"}
+OPENAI_DEFAULTS = {"model": "gpt-realtime-2.1", "voice": "marin", "transcription_model": "gpt-4o-mini-transcribe"}
 OUTBOUND_DEFAULTS = {"permission_request": "{assistant}, the AI assistant{at_business}, would like to call you on "
                                            "WhatsApp about your appointment."}
 # Meta's limit for the body of an interactive message.
 PERMISSION_REQUEST_LIMIT = 1024
 GROK_MODEL = re.compile(r"^grok-voice-[a-z0-9][a-z0-9.-]{0,30}$")
+OPENAI_MODEL = re.compile(r"^gpt-[a-z0-9][a-z0-9.-]{0,40}$")
 VOICE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -110,6 +117,13 @@ def load_spec(path):
         raise ValueError("agent.toml grok.model must be an xAI voice model such as grok-voice-3.0")
     if not VOICE_ID.match(str(spec.grok["voice"])):
         raise ValueError("agent.toml grok.voice must be a voice ID such as eve")
+    unknown = set(raw.get("openai", {})) - set(OPENAI_DEFAULTS)
+    if unknown:
+        raise ValueError("agent.toml [openai] has unknown keys: " + ", ".join(sorted(unknown)))
+    if not (OPENAI_MODEL.match(str(spec.openai["model"])) and OPENAI_MODEL.match(str(spec.openai["transcription_model"]))):
+        raise ValueError("agent.toml openai.model and openai.transcription_model must be OpenAI model IDs such as gpt-realtime-2.1")
+    if not VOICE_ID.match(str(spec.openai["voice"])):
+        raise ValueError("agent.toml openai.voice must be a voice ID such as marin")
     unknown = set(raw.get("outbound", {})) - set(OUTBOUND_DEFAULTS)
     if unknown:
         raise ValueError("agent.toml [outbound] has unknown keys: " + ", ".join(sorted(unknown)))

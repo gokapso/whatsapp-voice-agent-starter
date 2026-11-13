@@ -112,7 +112,7 @@ class TestSessionConfig:
 
     def test_settings_and_agent_toml_validation(self, tmp_path):
         with pytest.raises(ConfigError, match="VOICE_PROVIDER"):
-            load_settings(environ={"VOICE_PROVIDER": "openai"})
+            load_settings(environ={"VOICE_PROVIDER": "nope"})
         settings = load_settings(environ={"VOICE_PROVIDER": "grok", "CALLER_KEY_SECRET": "c" * 64, "CALENDAR": "local"})
         assert settings.agent_missing() == ["XAI_API_KEY (or DEV_AGENT_WS_URL)"]
         assert replace(settings, xai_api_key="k").agent_ready
