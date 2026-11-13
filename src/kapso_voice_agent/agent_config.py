@@ -73,6 +73,9 @@ class AgentSpec:
         return self.business.name or "this business"
 
     def recording_status(self, recording):
+        if self.raw["agent"].get("language") == "es":
+            return ("El audio de esta llamada se graba y se guarda en privado." if recording
+                    else "El audio de esta llamada no se graba.")
         if recording:
             return "This call's audio is recorded and kept privately for quality review."
         return "This call's audio is not recorded."
@@ -141,7 +144,7 @@ def load_spec(path):
             text = spec.greeting(direction, recording)
             if len(text) > 300:
                 raise ValueError(f"The {direction} greeting is too long for a phone opening")
-            if "AI" not in text:
+            if "AI" not in text and " IA " not in f" {text} ":
                 raise ValueError(f"The {direction} greeting must say the caller is talking to an AI")
             if any(phrase in text.lower() for phrase in FILLER_PHRASES):
                 raise ValueError(f"The {direction} greeting contains filler")

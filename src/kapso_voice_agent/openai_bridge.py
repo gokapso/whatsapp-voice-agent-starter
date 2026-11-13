@@ -21,7 +21,7 @@ from urllib.parse import quote
 from pipecat.audio.utils import create_stream_resampler
 
 from .bridge import SAMPLE_RATE
-from .grok_bridge import GrokAgentBridge, grok_tools, render_instructions
+from .grok_bridge import END_CALL, GrokAgentBridge, grok_tools, render_instructions
 
 OPENAI_REALTIME = "wss://api.openai.com/v1/realtime"
 OPENAI_RATE = 24000
@@ -39,7 +39,7 @@ def session_update(spec, variables):
         "output_modalities": ["audio"],
         "instructions": render_instructions(spec.prompt, variables),
         "audio": {"input": audio_input, "output": {"format": pcm, "voice": spec.openai["voice"]}},
-        "tools": grok_tools(),
+        "tools": grok_tools() if spec.raw["agent"].get("booking_tools", True) else [END_CALL],
         "tool_choice": "auto",
     }}
 

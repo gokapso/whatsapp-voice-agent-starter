@@ -1,0 +1,87 @@
+# ElevenLabs Agents settings for Riley, the AI front desk. Edit freely.
+#
+# `voice-agent agent plan` renders this file, prompt.md and the tool schemas in
+# src/kapso_voice_agent/tools.py into build/agent-config.json without network access.
+# Nothing is sent to ElevenLabs unless an operator runs `voice-agent agent apply --yes`.
+
+[agent]
+# Provider-side name. `agent apply` refuses to update an existing agent whose name differs.
+name = "Kap guardia (simulacro)"
+assistant_name = "Kap"
+language = "es"
+# Only end_call: Kap does not book appointments.
+booking_tools = false
+prompt_file = "prompt.md"
+# Your business facts and the Cal.com event types Riley books. The business name comes from here.
+business_file = "../business.json"
+# Offline calendar for development only (CALENDAR=local); real callers book through Cal.com.
+dev_calendar_file = "../dev-calendar.json"
+llm = "gpt-4.1"
+temperature = 0.3
+max_tokens = 300
+tags = ["kapso", "voice-agent-starter", "front-desk", "english"]
+
+[voice]
+# "River" is an ElevenLabs premade voice. It was the voice in one tested handset call;
+# it is an example, not a recommendation. Confirm it is available to your account first.
+voice_id = "SAz9YHcvj6GT2YYXdXww"
+tts_model = "eleven_v4_turbo"
+speed = 0.95
+# Lower stability lets the voice vary more from line to line. 0.45 is a small step down from 0.5
+# for a livelier delivery; listen on a real call and go back up if it sounds uneven.
+stability = 0.45
+# Expressive mode belongs to the Eleven v3 Conversational model and lets the LLM add audio tags
+# such as [laughs] or [sighs]. It stays off: performed sounds are not allowed here, and switching
+# models changes latency and turn-taking. The prompt asks for warmth in the words instead.
+expressive_mode = false
+
+[asr]
+provider = "scribe_realtime"
+# Add your business name, service names and other words callers say that speech recognition might miss.
+keywords = ["Kap", "Kapso", "rollback", "SEV1", "Slack"]
+
+[turn]
+turn_timeout = 15
+silence_end_call_timeout = 45
+turn_eagerness = "patient"
+
+[limits]
+# The bridge also enforces MAX_SESSION_SECONDS; keep it a little above this value.
+max_duration_seconds = 300
+concurrency_limit = 1
+daily_limit = 10
+
+[privacy]
+# true: ElevenLabs keeps the call audio for retention_days. At call time the server reads the
+# stored agent's setting back and the greeting says the call is recorded only if that stored
+# setting (or LOCAL_CAPTURE=1 on the server) is on. Run `agent apply --yes` after changing it.
+record_audio = true
+retention_days = 7
+
+[openai]
+model = "gpt-realtime-2.1"
+voice = "marin"
+transcription_model = "gpt-4o-mini-transcribe"
+
+[grok]
+# Used only with VOICE_PROVIDER=grok: xAI Grok Voice runs speech recognition, the LLM and the
+# voice in one realtime session. It shares the prompt, greetings, tools and limits in this file
+# and sends [asr] keywords as transcription hints. [voice], [turn] and [privacy] are ElevenLabs
+# settings and do not apply. grok-voice-3.0 is pinned; grok-voice-latest follows xAI's newest model.
+model = "grok-voice-3.0"
+# A built-in xAI voice ID (GET https://api.x.ai/v1/tts/voices lists them) or a custom voice ID.
+voice = "eve"
+
+[greetings]
+# {assistant} comes from [agent]; {business} is business_name in business.json, and {at_business}
+# is " at <business_name>" or nothing while the name is empty. {recording} becomes
+# recording_notice (with a leading space) when recording applies, or nothing when it does not.
+inbound = "Hola, soy Kap, el agente de IA de ingeniería de Kapso.{recording} ¿En qué te ayudo?"
+outbound = "Hola, soy Kap, el agente de IA de ingeniería de Kapso. Te llamo por un simulacro de incidente SEV1.{recording} ¿Tienes un minuto?"
+recording_notice = "Esta llamada se graba."
+
+[outbound]
+# Before the console can call someone, WhatsApp needs their permission: "Ask to allow calls" sends
+# them this text with a button to allow calls from your business. Same placeholders as
+# [greetings], without {recording}.
+permission_request = "Kap, el agente de ingeniería de Kapso, quiere poder llamarte por WhatsApp cuando haya un incidente."

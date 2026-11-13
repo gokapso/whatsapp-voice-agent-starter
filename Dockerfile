@@ -26,7 +26,7 @@ RUN uv sync --frozen --no-dev \
     && chmod 0755 docker-entrypoint.sh
 
 USER app
-ENV PATH=/app/.venv/bin:$PATH DATA_DIR=/app/data PYTHONUNBUFFERED=1 LOGURU_LEVEL=INFO
+ENV AGENT_CONFIG_PATH=/app/agent/kap/agent.toml PATH=/app/.venv/bin:$PATH DATA_DIR=/app/data PYTHONUNBUFFERED=1 LOGURU_LEVEL=INFO
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('PORT') or 8080}/healthz\", timeout=3)"]
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
